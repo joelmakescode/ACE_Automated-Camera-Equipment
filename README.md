@@ -57,3 +57,6 @@ Ziel des Projekts ist die Entwicklung eines intelligenten Kamerasystems, das Obj
 3. Der Ball wird erkannt und lokalisiert.
 4. Die Drohne bewegt sich entlang des Seils, um dem Ball zu folgen.
 5. Das Live-Bild wird auf einem angeschlossenen Bildschirm angezeigt.
+
+## PlantUML
+Zur Veranschaulichung des Programmcodes wird die Funktionsweise der Unified Modelling Language (UML) verwendet.
