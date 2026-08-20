@@ -2,7 +2,7 @@
 
 Ein Modellbau-Projekt einer an einem Seil befestigten Drohne, die autonom einem Ball folgt und das Sichtfeld der Drohne in Echtzeit auf einen Bildschirm überträgt.
 
-## 📖 Projektbeschreibung
+## Projektbeschreibung
 
 Dieses Projekt kombiniert Robotik, Computer Vision und Embedded Systems in einem kompakten Demonstrator. Die Drohne bewegt sich entlang eines gespannten Seils und verfolgt dabei einen Ball automatisiert. Die Bildverarbeitung sowie die Videoausgabe werden von einem Raspberry Pi (RPI) übernommen.
 
@@ -17,7 +17,7 @@ Ziel des Projekts ist die Entwicklung eines intelligenten Kamerasystems, das Obj
 - Modellbau-Drohne mit Seilführung
 - Echtzeitsteuerung und Bewegungsanpassung
 
-## 🔧 Hardware
+## Hardware
 
 ### Komponenten
 
@@ -29,7 +29,7 @@ Ziel des Projekts ist die Entwicklung eines intelligenten Kamerasystems, das Obj
 - Bildschirm oder Monitor
 - Stromversorgung
 
-## 💻 Software
+## Software
 
 ### Verwendete Technologien
 
