@@ -7,12 +7,17 @@
 #include <opencv2/geometry/2d.hpp>
 #endif
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 struct BallDetector {
     bool use_camera;
-    cv::VideoCapture capture;
-    cv::Mat static_image;
+    FILE *pipe = nullptr;      /* rpicam-vid Subprozess (Kameramodus) */
+    int cam_width = 0;
+    int cam_height = 0;
+    std::vector<unsigned char> yuv_buf;
+    cv::Mat static_image;      /* Bildmodus */
     cv::Mat frame_buf;
     cv::Mat hsv_buf;
     cv::Mat mask_buf;
@@ -25,18 +30,34 @@ extern "C" HsvRange bd_default_hsv_range(void) {
     return range;
 }
 
+/* Die Arducam IMX519 liefert ueber /dev/video0 (unicam) nur rohe, gepackte
+ * Bayer-Daten - dafuer muesste die Media-Controller-Pipeline manuell
+ * konfiguriert werden, was cv::VideoCapture(CAP_V4L2) nicht tut (fuehrt zu
+ * "select() timeout"). Stattdessen startet rpicam-vid die Kamera ueber den
+ * libcamera-Stack und liefert fertige YUV420-Frames ueber eine Pipe.
+ * device_path wird aktuell nicht genutzt (rpicam-vid waehlt den erkannten
+ * Sensor automatisch); Parameter bleibt fuer eine spaetere --camera-Auswahl
+ * bei mehreren angeschlossenen Kameras erhalten. */
 extern "C" BallDetector *bd_create_camera(const char *device_path, int width, int height) {
+    (void)device_path;
+
     BallDetector *bd = new BallDetector();
     bd->use_camera = true;
-    bd->capture.open(device_path, cv::CAP_V4L2);
-    if (!bd -> capture.isOpened()) {
-        std::fprintf(stderr, "Failed to open camera\n");
+    bd->cam_width  = width  > 0 ? width  : 1280;
+    bd->cam_height = height > 0 ? height : 720;
+    bd->yuv_buf.resize(static_cast<size_t>(bd->cam_width) * bd->cam_height * 3 / 2);
+
+    std::string cmd = "rpicam-vid --nopreview -t 0 --codec yuv420"
+                       " --width " + std::to_string(bd->cam_width) +
+                       " --height " + std::to_string(bd->cam_height) +
+                       " --framerate 15 -o - 2>/dev/null";
+
+    bd->pipe = popen(cmd.c_str(), "r");
+    if (!bd->pipe) {
+        std::fprintf(stderr, "Failed to start rpicam-vid\n");
         delete bd;
         return nullptr;
     }
-
-    if (width > 0) bd->capture.set(cv::CAP_PROP_FRAME_WIDTH, width);
-    if (height > 0) bd->capture.set(cv::CAP_PROP_FRAME_HEIGHT, height);
 
     return bd;
 }
@@ -65,10 +86,15 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
 
     const cv::Mat *frame_ptr;
     if (bd->use_camera) {
-        if (!bd->capture.read(bd->frame_buf) || bd->frame_buf.empty()) {
-            std::fprintf(stderr, "Failed to read frame\n");
+        size_t n = std::fread(bd->yuv_buf.data(), 1, bd->yuv_buf.size(), bd->pipe);
+        if (n != bd->yuv_buf.size()) {
+            std::fprintf(stderr, "Failed to read frame from rpicam-vid\n");
             return -1;
         }
+        /* YUV420-Planar (I420): Hoehe*1.5 Zeilen als 1-Kanal-Mat interpretieren,
+         * dann in BGR konvertieren. */
+        cv::Mat yuv(bd->cam_height * 3 / 2, bd->cam_width, CV_8UC1, bd->yuv_buf.data());
+        cv::cvtColor(yuv, bd->frame_buf, cv::COLOR_YUV2BGR_I420);
         frame_ptr = &bd->frame_buf;
     }
     else {
@@ -129,8 +155,8 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
 
 extern "C" void bd_release(BallDetector *detector) {
     if (!detector) return;
-    if (detector->use_camera && detector->capture.isOpened()) {
-        detector->capture.release();
+    if (detector->use_camera && detector->pipe) {
+        pclose(detector->pipe);
     }
     delete detector;
 }
