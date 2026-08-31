@@ -13,11 +13,11 @@
 
 struct BallDetector {
     bool use_camera;
-    FILE *pipe = nullptr;      /* rpicam-vid Subprozess (Kameramodus) */
+    FILE *pipe = nullptr;
     int cam_width = 0;
     int cam_height = 0;
     std::vector<unsigned char> yuv_buf;
-    cv::Mat static_image;      /* Bildmodus */
+    cv::Mat static_image;
     cv::Mat frame_buf;
     cv::Mat hsv_buf;
     cv::Mat mask_buf;
@@ -30,14 +30,6 @@ extern "C" HsvRange bd_default_hsv_range(void) {
     return range;
 }
 
-/* Die Arducam IMX519 liefert ueber /dev/video0 (unicam) nur rohe, gepackte
- * Bayer-Daten - dafuer muesste die Media-Controller-Pipeline manuell
- * konfiguriert werden, was cv::VideoCapture(CAP_V4L2) nicht tut (fuehrt zu
- * "select() timeout"). Stattdessen startet rpicam-vid die Kamera ueber den
- * libcamera-Stack und liefert fertige YUV420-Frames ueber eine Pipe.
- * device_path wird aktuell nicht genutzt (rpicam-vid waehlt den erkannten
- * Sensor automatisch); Parameter bleibt fuer eine spaetere --camera-Auswahl
- * bei mehreren angeschlossenen Kameras erhalten. */
 extern "C" BallDetector *bd_create_camera(const char *device_path, int width, int height) {
     (void)device_path;
 
@@ -91,8 +83,7 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
             std::fprintf(stderr, "Failed to read frame from rpicam-vid\n");
             return -1;
         }
-        /* YUV420-Planar (I420): Hoehe*1.5 Zeilen als 1-Kanal-Mat interpretieren,
-         * dann in BGR konvertieren. */
+
         cv::Mat yuv(bd->cam_height * 3 / 2, bd->cam_width, CV_8UC1, bd->yuv_buf.data());
         cv::cvtColor(yuv, bd->frame_buf, cv::COLOR_YUV2BGR_I420);
         frame_ptr = &bd->frame_buf;
