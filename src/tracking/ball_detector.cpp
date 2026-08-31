@@ -144,6 +144,24 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
     return 0;
 }
 
+extern "C" int bd_save_annotated(BallDetector *bd, const DetectionResult *result, const char *out_path) {
+    if (!bd || !result || !out_path) return -1;
+
+    const cv::Mat &frame = bd->use_camera ? bd->frame_buf : bd->static_image;
+    if (frame.empty()) return -1;
+
+    cv::Mat annotated = frame.clone();
+
+    if (result->found) {
+        cv::Point center(static_cast<int>(result->x), static_cast<int>(result->y));
+        int radius = static_cast<int>(result->radius);
+        cv::circle(annotated, center, radius, cv::Scalar(0, 255, 0), 2);
+        cv::circle(annotated, center, 3, cv::Scalar(0, 0, 255), -1);
+    }
+
+    return cv::imwrite(out_path, annotated) ? 0 : -1;
+}
+
 extern "C" void bd_release(BallDetector *detector) {
     if (!detector) return;
     if (detector->use_camera && detector->pipe) {

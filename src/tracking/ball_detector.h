@@ -26,6 +26,9 @@ typedef struct {
     BallDetector *bd_create_from_image(const char *image_path);
 
     int bd_detect(BallDetector *detector, const HsvRange *range, DetectionResult *result);
+
+    int bd_save_annotated(BallDetector *detector, const DetectionResult *result, const char *out_path);
+
     void bd_release(BallDetector *detector);
 
 #ifdef __cplusplus
