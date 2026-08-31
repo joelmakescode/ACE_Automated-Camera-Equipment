@@ -9,7 +9,8 @@ static void print_usage(const char *prog) {
         "Verwendung: %s [--device /dev/video0 | --image pfad.jpg]\n"
         "               [--width N] [--height N] [--frames N]\n"
         "               [--h-min N] [--h-max N] [--s-min N] [--s-max N]\n"
-        "               [--v-min N] [--v-max N] [--save-frame pfad.jpg]\n",
+        "               [--v-min N] [--v-max N] [--save-frame pfad.jpg]\n"
+        "               [--stream [port]]\n",
         prog);
 }
 
@@ -20,6 +21,8 @@ int main(int argc, char **argv) {
     int width = 1280;
     int height = 720;
     long frames = 0;
+    int stream_enabled = 0;
+    int stream_port = 8080;
 
     HsvRange range = bd_default_hsv_range();
 
@@ -30,6 +33,7 @@ int main(int argc, char **argv) {
         {"height",     required_argument, 0, 'h'},
         {"frames",     required_argument, 0, 'f'},
         {"save-frame", required_argument, 0, 's'},
+        {"stream",     optional_argument, 0, 't'},
         {"h-min",      required_argument, 0, 1},
         {"h-max",      required_argument, 0, 2},
         {"s-min",      required_argument, 0, 3},
@@ -41,7 +45,7 @@ int main(int argc, char **argv) {
     };
 
     int opt, opt_index = 0;
-    while ((opt = getopt_long(argc, argv, "d:i:w:h:f:s:", long_opts, &opt_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:i:w:h:f:s:t::", long_opts, &opt_index)) != -1) {
         switch (opt) {
             case 'd': device = optarg; break;
             case 'i': image_path = optarg; break;
@@ -49,6 +53,10 @@ int main(int argc, char **argv) {
             case 'h': height = atoi(optarg); break;
             case 'f': frames = atol(optarg); break;
             case 's': save_frame_path = optarg; break;
+            case 't':
+                stream_enabled = 1;
+                if (optarg) stream_port = atoi(optarg);
+                break;
             case 1: range.h_min = atoi(optarg); break;
             case 2: range.h_max = atoi(optarg); break;
             case 3: range.s_min = atoi(optarg); break;
@@ -70,6 +78,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (stream_enabled) {
+        if (bd_stream_start(stream_port) != 0) {
+            fprintf(stderr, "Konnte Stream-Server auf Port %d nicht starten.\n", stream_port);
+            bd_release(detector);
+            return 1;
+        }
+        fprintf(stderr, "Live-Stream unter http://<pi-ip>:%d/\n", stream_port);
+    }
+
     long frame_num = 0;
     for (;;) {
         DetectionResult result;
@@ -86,10 +103,18 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Konnte Frame nicht nach %s schreiben.\n", save_frame_path);
         }
 
+        if (stream_enabled) {
+            bd_stream_push(detector, &result);
+        }
+
         frame_num++;
 
         if (image_path) break;
         if (frames > 0 && frame_num >= frames) break;
+    }
+
+    if (stream_enabled) {
+        bd_stream_stop();
     }
 
     bd_release(detector);

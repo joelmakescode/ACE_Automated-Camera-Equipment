@@ -8,8 +8,17 @@
 #endif
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 
 struct BallDetector {
     bool use_camera;
@@ -144,22 +153,149 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
     return 0;
 }
 
-extern "C" int bd_save_annotated(BallDetector *bd, const DetectionResult *result, const char *out_path) {
-    if (!bd || !result || !out_path) return -1;
-
-    const cv::Mat &frame = bd->use_camera ? bd->frame_buf : bd->static_image;
-    if (frame.empty()) return -1;
-
+static cv::Mat draw_overlay(const cv::Mat &frame, const DetectionResult *result) {
     cv::Mat annotated = frame.clone();
-
     if (result->found) {
         cv::Point center(static_cast<int>(result->x), static_cast<int>(result->y));
         int radius = static_cast<int>(result->radius);
         cv::circle(annotated, center, radius, cv::Scalar(0, 255, 0), 2);
         cv::circle(annotated, center, 3, cv::Scalar(0, 0, 255), -1);
     }
+    return annotated;
+}
 
+extern "C" int bd_save_annotated(BallDetector *bd, const DetectionResult *result, const char *out_path) {
+    if (!bd || !result || !out_path) return -1;
+
+    const cv::Mat &frame = bd->use_camera ? bd->frame_buf : bd->static_image;
+    if (frame.empty()) return -1;
+
+    cv::Mat annotated = draw_overlay(frame, result);
     return cv::imwrite(out_path, annotated) ? 0 : -1;
+}
+
+/* --- MJPEG-Live-Stream (multipart/x-mixed-replace) --- */
+
+namespace {
+    std::atomic<bool> g_stream_running{false};
+    int g_listen_fd = -1;
+    std::thread g_accept_thread;
+    std::mutex g_frame_mutex;
+    std::vector<uchar> g_latest_jpeg;
+    std::mutex g_clients_mutex;
+    std::vector<std::thread> g_client_threads;
+
+    void stream_client_loop(int client_fd) {
+        const char *header =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+            "Cache-Control: no-cache\r\n"
+            "Connection: close\r\n\r\n";
+        if (send(client_fd, header, std::strlen(header), 0) < 0) {
+            close(client_fd);
+            return;
+        }
+
+        while (g_stream_running) {
+            std::vector<uchar> jpeg_copy;
+            {
+                std::lock_guard<std::mutex> lock(g_frame_mutex);
+                jpeg_copy = g_latest_jpeg;
+            }
+            if (jpeg_copy.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            }
+
+            char part_header[128];
+            int hlen = std::snprintf(part_header, sizeof(part_header),
+                "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n",
+                jpeg_copy.size());
+            if (send(client_fd, part_header, hlen, 0) < 0) break;
+            if (send(client_fd, jpeg_copy.data(), jpeg_copy.size(), 0) < 0) break;
+            if (send(client_fd, "\r\n", 2, 0) < 0) break;
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(66)); /* ~15 fps */
+        }
+        close(client_fd);
+    }
+
+    void stream_accept_loop() {
+        while (g_stream_running) {
+            sockaddr_in client_addr{};
+            socklen_t addr_len = sizeof(client_addr);
+            int client_fd = accept(g_listen_fd, reinterpret_cast<sockaddr *>(&client_addr), &addr_len);
+            if (client_fd < 0) {
+                if (!g_stream_running) break;
+                continue;
+            }
+            std::lock_guard<std::mutex> lock(g_clients_mutex);
+            g_client_threads.emplace_back(stream_client_loop, client_fd);
+        }
+    }
+}
+
+extern "C" int bd_stream_start(int port) {
+    g_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (g_listen_fd < 0) return -1;
+
+    int opt = 1;
+    setsockopt(g_listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+
+    if (bind(g_listen_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+        std::fprintf(stderr, "bd_stream_start: bind auf Port %d fehlgeschlagen\n", port);
+        close(g_listen_fd);
+        g_listen_fd = -1;
+        return -1;
+    }
+    if (listen(g_listen_fd, 4) < 0) {
+        close(g_listen_fd);
+        g_listen_fd = -1;
+        return -1;
+    }
+
+    g_stream_running = true;
+    g_accept_thread = std::thread(stream_accept_loop);
+    return 0;
+}
+
+extern "C" int bd_stream_push(BallDetector *bd, const DetectionResult *result) {
+    if (!bd || !result || !g_stream_running) return -1;
+
+    const cv::Mat &frame = bd->use_camera ? bd->frame_buf : bd->static_image;
+    if (frame.empty()) return -1;
+
+    cv::Mat annotated = draw_overlay(frame, result);
+
+    std::vector<uchar> jpeg_buf;
+    cv::imencode(".jpg", annotated, jpeg_buf);
+
+    std::lock_guard<std::mutex> lock(g_frame_mutex);
+    g_latest_jpeg = std::move(jpeg_buf);
+    return 0;
+}
+
+extern "C" void bd_stream_stop(void) {
+    if (!g_stream_running) return;
+    g_stream_running = false;
+
+    if (g_listen_fd >= 0) {
+        shutdown(g_listen_fd, SHUT_RDWR);
+        close(g_listen_fd);
+        g_listen_fd = -1;
+    }
+    if (g_accept_thread.joinable()) g_accept_thread.join();
+
+    std::lock_guard<std::mutex> lock(g_clients_mutex);
+    for (auto &t : g_client_threads) {
+        if (t.joinable()) t.join();
+    }
+    g_client_threads.clear();
 }
 
 extern "C" void bd_release(BallDetector *detector) {

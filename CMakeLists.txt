@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenCV REQUIRED)
+find_package(Threads REQUIRED)
 
 add_executable(ace_tracking
     src/tracking/main.c
@@ -14,4 +15,4 @@ add_executable(ace_tracking
 )
 
 target_include_directories(ace_tracking PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(ace_tracking PRIVATE ${OpenCV_LIBS})
+target_link_libraries(ace_tracking PRIVATE ${OpenCV_LIBS} Threads::Threads)
