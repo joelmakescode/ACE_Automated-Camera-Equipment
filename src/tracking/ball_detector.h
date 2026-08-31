@@ -29,6 +29,18 @@ typedef struct {
 
     int bd_save_annotated(BallDetector *detector, const DetectionResult *result, const char *out_path);
 
+    /* Startet einen einfachen MJPEG-HTTP-Server (multipart/x-mixed-replace)
+     * auf dem angegebenen Port, fuer Live-Ansicht im Browser/ffplay unter
+     * http://<host>:<port>/. 0 bei Erfolg, -1 bei Fehler (z.B. Port belegt). */
+    int bd_stream_start(int port);
+
+    /* Kodiert den zuletzt erfassten Frame (mit Overlay falls result->found)
+     * als JPEG und macht ihn fuer alle verbundenen Stream-Clients verfuegbar. */
+    int bd_stream_push(BallDetector *detector, const DetectionResult *result);
+
+    /* Stoppt den Stream-Server und schliesst alle Verbindungen. */
+    void bd_stream_stop(void);
+
     void bd_release(BallDetector *detector);
 
 #ifdef __cplusplus
