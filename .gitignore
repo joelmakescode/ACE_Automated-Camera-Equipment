@@ -1,2 +1,5 @@
 # Idea Folder
 .idea
+
+# CMake build output
+/build

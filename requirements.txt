@@ -1,0 +1,16 @@
+# System-Abhaengigkeiten fuer den Raspberry Pi (Raspberry Pi OS / Bookworm)
+# Installation: sudo apt install <paket>
+#
+# build-essential   - gcc/g++, make
+# cmake             - Build-System
+# libopencv-dev     - OpenCV C++ Header + Libraries
+# pkg-config        - wird von CMake/find_package benoetigt
+# v4l-utils         - Diagnose der Kamera (v4l2-ctl --list-devices,
+#                     v4l2-ctl --list-formats-ext), nicht zum Bauen noetig
+#
+
+build-essential
+cmake
+libopencv-dev
+pkg-config
+v4l-utils
