@@ -16,3 +16,13 @@ add_executable(ace_tracking
 
 target_include_directories(ace_tracking PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(ace_tracking PRIVATE ${OpenCV_LIBS} Threads::Threads)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(ace_stepper_test
+        src/drone_control/stepper_test.c
+        src/drone_control/stepper.c
+    )
+    target_include_directories(ace_stepper_test PRIVATE src/drone_control)
+else()
+    message(STATUS "ace_stepper_test wird uebersprungen (nur Linux/Raspberry Pi).")
+endif()
