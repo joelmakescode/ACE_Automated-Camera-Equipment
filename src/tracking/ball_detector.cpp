@@ -174,8 +174,6 @@ extern "C" int bd_save_annotated(BallDetector *bd, const DetectionResult *result
     return cv::imwrite(out_path, annotated) ? 0 : -1;
 }
 
-/* --- MJPEG-Live-Stream (multipart/x-mixed-replace) --- */
-
 namespace {
     std::atomic<bool> g_stream_running{false};
     int g_listen_fd = -1;
