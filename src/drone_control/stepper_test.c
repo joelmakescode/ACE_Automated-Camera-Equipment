@@ -10,7 +10,7 @@
 
 #include "stepper.h"
 
-static const unsigned int MOTOR_PINS[4] = { 22, 18, 17, 27 };
+static const unsigned int MOTOR_PINS[4] = { 17, 18, 27, 22 };
 
 #define HALFSTEPS_PER_REV 4096
 
