@@ -12,15 +12,16 @@
 #include <linux/gpio.h>
 
 #define ACE_GPIO_CHIP "/dev/gpiochip0"
+#define ACE_LINES_PER_MOTOR 4
 
-static const unsigned char HALFSTEP[8] = {
+static const unsigned char HALFSTEP_PHASES[8] = {
     0x1, 0x3, 0x2, 0x6, 0x4, 0xC, 0x8, 0x9
 };
 
 struct Stepper {
     int  id;
     int  line_fd;
-    int  use_v2;
+    int  uses_v2_api;
     int  phase;
     long position;
 };
@@ -34,7 +35,10 @@ void stepper_set_dry_run(int enabled) {
 }
 
 static int chip_open(void) {
-    if (g_dry_run) { g_chip_ref++; return 0; }
+    if (g_dry_run) {
+        g_chip_ref++;
+        return 0;
+    }
 
     if (g_chip_fd < 0) {
         g_chip_fd = open(ACE_GPIO_CHIP, O_RDWR | O_CLOEXEC);
@@ -64,8 +68,8 @@ static int request_lines_v2(const unsigned int pins[4], int *out_fd) {
 #ifdef GPIO_V2_GET_LINE_IOCTL
     struct gpio_v2_line_request req;
     memset(&req, 0, sizeof(req));
-    for (int i = 0; i < 4; i++) req.offsets[i] = pins[i];
-    req.num_lines    = 4;
+    for (int i = 0; i < ACE_LINES_PER_MOTOR; i++) req.offsets[i] = pins[i];
+    req.num_lines    = ACE_LINES_PER_MOTOR;
     req.config.flags = GPIO_V2_LINE_FLAG_OUTPUT;
     snprintf(req.consumer, sizeof(req.consumer), "ace_stepper");
 
@@ -73,7 +77,8 @@ static int request_lines_v2(const unsigned int pins[4], int *out_fd) {
     *out_fd = req.fd;
     return 0;
 #else
-    (void)pins; (void)out_fd;
+    (void)pins;
+    (void)out_fd;
     errno = ENOTTY;
     return -1;
 #endif
@@ -82,8 +87,8 @@ static int request_lines_v2(const unsigned int pins[4], int *out_fd) {
 static int request_lines_v1(const unsigned int pins[4], int *out_fd) {
     struct gpiohandle_request req;
     memset(&req, 0, sizeof(req));
-    for (int i = 0; i < 4; i++) req.lineoffsets[i] = pins[i];
-    req.lines = 4;
+    for (int i = 0; i < ACE_LINES_PER_MOTOR; i++) req.lineoffsets[i] = pins[i];
+    req.lines = ACE_LINES_PER_MOTOR;
     req.flags = GPIOHANDLE_REQUEST_OUTPUT;
     snprintf(req.consumer_label, sizeof(req.consumer_label), "ace_stepper");
 
@@ -101,10 +106,10 @@ static int write_phase(Stepper *s, unsigned char bits) {
     }
 
 #ifdef GPIO_V2_GET_LINE_IOCTL
-    if (s->use_v2) {
+    if (s->uses_v2_api) {
         struct gpio_v2_line_values vals;
         memset(&vals, 0, sizeof(vals));
-        vals.mask = 0xF;        /* alle vier Leitungen der Gruppe */
+        vals.mask = 0xF;
         vals.bits = bits;
         return ioctl(s->line_fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &vals) < 0 ? -1 : 0;
     }
@@ -112,7 +117,9 @@ static int write_phase(Stepper *s, unsigned char bits) {
 
     struct gpiohandle_data data;
     memset(&data, 0, sizeof(data));
-    for (int i = 0; i < 4; i++) data.values[i] = (unsigned char)((bits >> i) & 1);
+    for (int i = 0; i < ACE_LINES_PER_MOTOR; i++) {
+        data.values[i] = (unsigned char)((bits >> i) & 1);
+    }
     return ioctl(s->line_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data) < 0 ? -1 : 0;
 }
 
@@ -120,7 +127,10 @@ Stepper *stepper_create(int id, const unsigned int pins[4]) {
     if (chip_open() != 0) return NULL;
 
     Stepper *s = calloc(1, sizeof(*s));
-    if (!s) { chip_close(); return NULL; }
+    if (!s) {
+        chip_close();
+        return NULL;
+    }
 
     s->id       = id;
     s->line_fd  = -1;
@@ -129,9 +139,9 @@ Stepper *stepper_create(int id, const unsigned int pins[4]) {
 
     if (!g_dry_run) {
         if (request_lines_v2(pins, &s->line_fd) == 0) {
-            s->use_v2 = 1;
+            s->uses_v2_api = 1;
         } else if (request_lines_v1(pins, &s->line_fd) == 0) {
-            s->use_v2 = 0;
+            s->uses_v2_api = 0;
         } else {
             fprintf(stderr, "Motor %d: GPIO %u,%u,%u,%u nicht anforderbar: %s\n",
                     id, pins[0], pins[1], pins[2], pins[3], strerror(errno));
@@ -145,7 +155,7 @@ Stepper *stepper_create(int id, const unsigned int pins[4]) {
         }
     }
 
-    if (write_phase(s, 0x0) != 0) {   
+    if (write_phase(s, 0x0) != 0) {
         stepper_destroy(s);
         return NULL;
     }
@@ -156,14 +166,14 @@ int stepper_advance(Stepper *s, int dir) {
     if (!s || dir == 0) return -1;
 
     s->phase = (s->phase + (dir > 0 ? 1 : 7)) & 7;
-    if (write_phase(s, HALFSTEP[s->phase]) != 0) return -1;
+    if (write_phase(s, HALFSTEP_PHASES[s->phase]) != 0) return -1;
 
     s->position += (dir > 0 ? 1 : -1);
     return 0;
 }
 
 int stepper_hold(Stepper *s) {
-    return s ? write_phase(s, HALFSTEP[s->phase]) : -1;
+    return s ? write_phase(s, HALFSTEP_PHASES[s->phase]) : -1;
 }
 
 int stepper_release(Stepper *s) {

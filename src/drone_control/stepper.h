@@ -12,9 +12,7 @@ void stepper_set_dry_run(int enabled);
 Stepper *stepper_create(int id, const unsigned int pins[4]);
 
 int stepper_advance(Stepper *s, int dir);
-
 int stepper_hold(Stepper *s);
-
 int stepper_release(Stepper *s);
 
 long stepper_position(const Stepper *s);
