@@ -24,6 +24,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/drone_control/stepper.c
     )
     target_include_directories(ace_motor_test PRIVATE src/drone_control)
+    target_link_libraries(ace_motor_test PRIVATE Threads::Threads)
+
+    add_executable(ace_drone
+        src/drone_control/drone_main.c
+        src/drone_control/navigator.c
+        src/drone_control/kinematics.c
+        src/drone_control/motion.c
+        src/drone_control/stepper.c
+        src/tracking/ball_detector.cpp
+    )
+    target_include_directories(ace_drone PRIVATE
+        src/drone_control
+        src/tracking
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(ace_drone PRIVATE ${OpenCV_LIBS} Threads::Threads m)
 else()
-    message(STATUS "ace_motor_test wird uebersprungen (nur Linux/Raspberry Pi).")
+    message(STATUS "ace_motor_test und ace_drone werden uebersprungen (nur Linux/Raspberry Pi).")
 endif()

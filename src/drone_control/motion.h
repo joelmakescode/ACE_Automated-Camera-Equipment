@@ -19,6 +19,10 @@ int  motion_start(const long steps[ACE_MOTOR_COUNT], unsigned int step_delay_us)
 int  motion_tick(void);
 void motion_wait_next(void);
 int  motion_run(const long steps[ACE_MOTOR_COUNT], unsigned int step_delay_us);
+void motion_abort(void);
+
+int  motion_thread_start(void);
+void motion_thread_stop(void);
 
 bool motion_busy(void);
 long motion_position(int motor);

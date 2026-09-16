@@ -1,0 +1,75 @@
+#ifndef ACE_DRONE_CONTROL_GEOMETRY_H
+#define ACE_DRONE_CONTROL_GEOMETRY_H
+
+#include "pins.h"
+
+#define ACE_PI 3.14159265358979323846
+
+#ifndef ACE_ANCHOR_SPAN_X_MM
+#define ACE_ANCHOR_SPAN_X_MM 500.0
+#endif
+
+#ifndef ACE_ANCHOR_SPAN_Y_MM
+#define ACE_ANCHOR_SPAN_Y_MM 500.0
+#endif
+
+#ifndef ACE_HOVER_HEIGHT_MM
+#define ACE_HOVER_HEIGHT_MM 200.0
+#endif
+
+#ifndef ACE_DRUM_DIAMETER_MM
+#define ACE_DRUM_DIAMETER_MM 20.0
+#endif
+
+#define ACE_MM_PER_HALFSTEP \
+    ((ACE_PI * ACE_DRUM_DIAMETER_MM) / (double)ACE_HALFSTEPS_PER_REV)
+
+#ifndef ACE_PATROL_SPAN_MM
+#define ACE_PATROL_SPAN_MM 300.0
+#endif
+
+#ifndef ACE_START_X_MM
+#define ACE_START_X_MM 0.0
+#endif
+
+#ifndef ACE_START_Y_MM
+#define ACE_START_Y_MM 0.0
+#endif
+
+#ifndef ACE_REACH_LIMIT_MM
+#define ACE_REACH_LIMIT_MM 200.0
+#endif
+
+#ifndef ACE_VIEW_WIDTH_MM
+#define ACE_VIEW_WIDTH_MM 400.0
+#endif
+
+#ifndef ACE_CENTER_TOLERANCE_PX
+#define ACE_CENTER_TOLERANCE_PX 25.0
+#endif
+
+#ifndef ACE_MAX_CORRECTION_MM
+#define ACE_MAX_CORRECTION_MM 25.0
+#endif
+
+#ifndef ACE_CORRECTION_GAIN
+#define ACE_CORRECTION_GAIN 0.6
+#endif
+
+#ifndef ACE_LOST_GRACE_MS
+#define ACE_LOST_GRACE_MS 3000
+#endif
+
+#ifndef ACE_IMAGE_TO_FIELD_X
+#define ACE_IMAGE_TO_FIELD_X 1.0
+#endif
+
+#ifndef ACE_IMAGE_TO_FIELD_Y
+#define ACE_IMAGE_TO_FIELD_Y -1.0
+#endif
+
+#ifndef ACE_TRAVEL_DELAY_US
+#define ACE_TRAVEL_DELAY_US 2500u
+#endif
+
+#endif

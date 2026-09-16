@@ -3,6 +3,7 @@
 #include "motion.h"
 #include "stepper.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -20,6 +21,10 @@ static long g_lead_done  = 0;
 static unsigned int    g_step_delay_us = ACE_DEFAULT_STEP_DELAY_US;
 static struct timespec g_next_step_at;
 static int             g_running = 0;
+
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t       g_worker;
+static volatile int    g_worker_active = 0;
 
 static void deadline_add_us(struct timespec *ts, unsigned int us) {
     ts->tv_nsec += (long)us * 1000L;
@@ -40,34 +45,57 @@ static void reschedule_if_far_behind(const struct timespec *now) {
     }
 }
 
+static void sleep_ms(long ms) {
+    struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+
 int motion_init(void) {
-    if (g_initialized) return 0;
+    pthread_mutex_lock(&g_lock);
+    if (g_initialized) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         g_motors[i] = stepper_create(i, ACE_MOTOR_PINS[i]);
         if (!g_motors[i]) {
             fprintf(stderr, "motion_init: Motor %d (%s) fehlgeschlagen.\n",
                     i, ACE_MOTOR_NAMES[i]);
-            motion_shutdown();
+            for (int j = 0; j < ACE_MOTOR_COUNT; j++) {
+                stepper_destroy(g_motors[j]);
+                g_motors[j] = NULL;
+            }
+            pthread_mutex_unlock(&g_lock);
             return -1;
         }
     }
 
     g_initialized = 1;
+    pthread_mutex_unlock(&g_lock);
     return 0;
 }
 
 void motion_shutdown(void) {
+    motion_thread_stop();
+
+    pthread_mutex_lock(&g_lock);
     g_running = 0;
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         stepper_destroy(g_motors[i]);
         g_motors[i] = NULL;
     }
     g_initialized = 0;
+    pthread_mutex_unlock(&g_lock);
 }
 
 int motion_start(const long steps[ACE_MOTOR_COUNT], unsigned int step_delay_us) {
-    if (!g_initialized) return -1;
+    pthread_mutex_lock(&g_lock);
+
+    if (!g_initialized) {
+        pthread_mutex_unlock(&g_lock);
+        return -1;
+    }
 
     if (step_delay_us < ACE_MIN_STEP_DELAY_US) {
         fprintf(stderr, "Schrittzeit %u us zu kurz, auf %u us begrenzt.\n",
@@ -86,6 +114,7 @@ int motion_start(const long steps[ACE_MOTOR_COUNT], unsigned int step_delay_us) 
 
     if (g_lead_steps == 0) {
         g_running = 0;
+        pthread_mutex_unlock(&g_lock);
         return 0;
     }
 
@@ -97,15 +126,25 @@ int motion_start(const long steps[ACE_MOTOR_COUNT], unsigned int step_delay_us) 
     g_step_delay_us = step_delay_us;
     g_running       = 1;
     clock_gettime(CLOCK_MONOTONIC, &g_next_step_at);
+
+    pthread_mutex_unlock(&g_lock);
     return 0;
 }
 
 int motion_tick(void) {
-    if (!g_running) return 1;
+    pthread_mutex_lock(&g_lock);
+
+    if (!g_running) {
+        pthread_mutex_unlock(&g_lock);
+        return 1;
+    }
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    if (elapsed_us(&g_next_step_at, &now) > 0) return 0;
+    if (elapsed_us(&g_next_step_at, &now) > 0) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         if (g_steps_left[i] <= 0) continue;
@@ -117,6 +156,7 @@ int motion_tick(void) {
                 fprintf(stderr, "Motor %d (%s): Schritt fehlgeschlagen.\n",
                         i, ACE_MOTOR_NAMES[i]);
                 g_running = 0;
+                pthread_mutex_unlock(&g_lock);
                 return -1;
             }
             g_steps_left[i]--;
@@ -126,17 +166,28 @@ int motion_tick(void) {
     g_lead_done++;
     if (g_lead_done >= g_lead_steps) {
         g_running = 0;
+        pthread_mutex_unlock(&g_lock);
         return 1;
     }
 
     deadline_add_us(&g_next_step_at, g_step_delay_us);
     reschedule_if_far_behind(&now);
+
+    pthread_mutex_unlock(&g_lock);
     return 0;
 }
 
 void motion_wait_next(void) {
-    if (!g_running) return;
-    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &g_next_step_at, NULL);
+    struct timespec deadline;
+    int running;
+
+    pthread_mutex_lock(&g_lock);
+    running  = g_running;
+    deadline = g_next_step_at;
+    pthread_mutex_unlock(&g_lock);
+
+    if (!running) return;
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL);
 }
 
 int motion_run(const long steps[ACE_MOTOR_COUNT], unsigned int step_delay_us) {
@@ -150,19 +201,70 @@ int motion_run(const long steps[ACE_MOTOR_COUNT], unsigned int step_delay_us) {
     }
 }
 
+void motion_abort(void) {
+    pthread_mutex_lock(&g_lock);
+    g_running = 0;
+    pthread_mutex_unlock(&g_lock);
+}
+
+static void *worker_main(void *arg) {
+    (void)arg;
+
+    while (g_worker_active) {
+        if (motion_busy()) {
+            motion_tick();
+            motion_wait_next();
+        } else {
+            sleep_ms(2);
+        }
+    }
+    return NULL;
+}
+
+int motion_thread_start(void) {
+    if (g_worker_active) return 0;
+
+    g_worker_active = 1;
+    if (pthread_create(&g_worker, NULL, worker_main, NULL) != 0) {
+        g_worker_active = 0;
+        fprintf(stderr, "motion_thread_start: pthread_create fehlgeschlagen.\n");
+        return -1;
+    }
+    return 0;
+}
+
+void motion_thread_stop(void) {
+    if (!g_worker_active) return;
+
+    g_worker_active = 0;
+    pthread_join(g_worker, NULL);
+}
+
 bool motion_busy(void) {
-    return g_running != 0;
+    pthread_mutex_lock(&g_lock);
+    int running = g_running;
+    pthread_mutex_unlock(&g_lock);
+    return running != 0;
 }
 
 long motion_position(int motor) {
     if (motor < 0 || motor >= ACE_MOTOR_COUNT) return 0;
-    return stepper_position(g_motors[motor]);
+
+    pthread_mutex_lock(&g_lock);
+    long pos = stepper_position(g_motors[motor]);
+    pthread_mutex_unlock(&g_lock);
+    return pos;
 }
 
 void motion_hold(void) {
+    pthread_mutex_lock(&g_lock);
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) stepper_hold(g_motors[i]);
+    pthread_mutex_unlock(&g_lock);
 }
 
 void motion_release(void) {
+    pthread_mutex_lock(&g_lock);
+    g_running = 0;
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) stepper_release(g_motors[i]);
+    pthread_mutex_unlock(&g_lock);
 }
