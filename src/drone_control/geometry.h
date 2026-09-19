@@ -82,8 +82,20 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_CENTER_TOLERANCE_PX 25.0
 #endif
 
+#ifndef ACE_HOVER_RELEASE_PX
+#define ACE_HOVER_RELEASE_PX 45.0
+#endif
+
 #ifndef ACE_MAX_CORRECTION_MM
 #define ACE_MAX_CORRECTION_MM 25.0
+#endif
+
+#ifndef ACE_REAIM_MS
+#define ACE_REAIM_MS 300
+#endif
+
+#ifndef ACE_WRONG_WAY_STRIKES
+#define ACE_WRONG_WAY_STRIKES 4
 #endif
 
 #ifndef ACE_CORRECTION_GAIN

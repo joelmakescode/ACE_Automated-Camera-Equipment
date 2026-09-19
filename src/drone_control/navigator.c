@@ -9,6 +9,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <time.h>
 
 #define PATROL_HALF_X (ACE_PATROL_SPAN_X_MM / 2.0)
@@ -34,6 +35,20 @@ static int g_patrol_index = 0;
 
 static struct timespec g_last_seen;
 static int             g_ever_seen = 0;
+
+static struct timespec g_last_cmd;
+static int    g_have_last_cmd = 0;
+static double g_cmd_err_x = 0.0;
+static double g_cmd_err_y = 0.0;
+static int    g_worse_x = 0;
+static int    g_worse_y = 0;
+static int    g_warned_x = 0;
+static int    g_warned_y = 0;
+
+static void forget_last_command(void) {
+    g_have_last_cmd = 0;
+    g_worse_x = g_worse_y = 0;
+}
 
 static void read_motors(long steps[ACE_MOTOR_COUNT]) {
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) steps[i] = motion_position(i);
@@ -66,7 +81,10 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     g_state        = NAV_PATROL;
     g_patrol_index = 0;
     g_ever_seen    = 0;
+    g_warned_x     = 0;
+    g_warned_y     = 0;
 
+    forget_last_command();
     path_abort();
 
     long motor_steps[ACE_MOTOR_COUNT];
@@ -77,24 +95,59 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     return 0;
 }
 
+static void check_direction(double error_x, double error_y) {
+    if (!g_have_last_cmd) return;
+
+    g_worse_x = (fabs(error_x) > fabs(g_cmd_err_x) + 3.0) ? g_worse_x + 1 : 0;
+    g_worse_y = (fabs(error_y) > fabs(g_cmd_err_y) + 3.0) ? g_worse_y + 1 : 0;
+
+    if (g_worse_x >= ACE_WRONG_WAY_STRIKES && !g_warned_x) {
+        fprintf(stderr,
+                "\nDie Abweichung in x waechst seit %d Korrekturen (%.0f -> %.0f px).\n"
+                "Die Plattform faehrt vom Objekt weg. ACE_IMAGE_TO_FIELD_X in\n"
+                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n\n",
+                g_worse_x, fabs(g_cmd_err_x), fabs(error_x),
+                (double)ACE_IMAGE_TO_FIELD_X, -(double)ACE_IMAGE_TO_FIELD_X);
+        g_warned_x = 1;
+    }
+    if (g_worse_y >= ACE_WRONG_WAY_STRIKES && !g_warned_y) {
+        fprintf(stderr,
+                "\nDie Abweichung in y waechst seit %d Korrekturen (%.0f -> %.0f px).\n"
+                "Die Plattform faehrt vom Objekt weg. ACE_IMAGE_TO_FIELD_Y in\n"
+                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n\n",
+                g_worse_y, fabs(g_cmd_err_y), fabs(error_y),
+                (double)ACE_IMAGE_TO_FIELD_Y, -(double)ACE_IMAGE_TO_FIELD_Y);
+        g_warned_y = 1;
+    }
+}
+
 static void follow_object(const DetectionResult *result,
                           const long motor_steps[ACE_MOTOR_COUNT]) {
     double error_x = result->x - g_frame_width  / 2.0;
     double error_y = result->y - g_frame_height / 2.0;
 
-    int centered = fabs(error_x) <= ACE_CENTER_TOLERANCE_PX &&
-                   fabs(error_y) <= ACE_CENTER_TOLERANCE_PX;
-
-    if (g_state == NAV_PATROL) path_abort();
+    double limit = (g_state == NAV_HOVER) ? ACE_HOVER_RELEASE_PX
+                                          : ACE_CENTER_TOLERANCE_PX;
+    int centered = fabs(error_x) <= limit && fabs(error_y) <= limit;
 
     if (centered) {
-        path_abort();
-        g_state = NAV_HOVER;
+        if (g_state != NAV_HOVER) {
+            path_abort();
+            g_state = NAV_HOVER;
+            forget_last_command();
+        }
         return;
     }
 
+    if (g_state == NAV_PATROL) {
+        path_abort();
+        forget_last_command();
+    }
     g_state = NAV_APPROACH;
-    if (path_busy()) return;
+
+    if (g_have_last_cmd && ms_since(&g_last_cmd) < ACE_REAIM_MS) return;
+
+    check_direction(error_x, error_y);
 
     double mm_per_pixel = ACE_VIEW_WIDTH_MM / (double)g_frame_width;
     double shift_x = clamp_abs(error_x * mm_per_pixel * ACE_CORRECTION_GAIN
@@ -105,6 +158,11 @@ static void follow_object(const DetectionResult *result,
     double x_mm, y_mm;
     kin_position(motor_steps, &x_mm, &y_mm);
     start_move(x_mm + shift_x, y_mm + shift_y);
+
+    g_cmd_err_x     = error_x;
+    g_cmd_err_y     = error_y;
+    g_have_last_cmd = 1;
+    clock_gettime(CLOCK_MONOTONIC, &g_last_cmd);
 }
 
 static void continue_patrol(void) {
@@ -129,6 +187,7 @@ void nav_update(const DetectionResult *result) {
         if (ms_since(&g_last_seen) < ACE_LOST_GRACE_MS) return;
         g_state        = NAV_PATROL;
         g_patrol_index = 0;
+        forget_last_command();
     }
 
     continue_patrol();
