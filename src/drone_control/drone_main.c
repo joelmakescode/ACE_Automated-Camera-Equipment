@@ -79,7 +79,14 @@ static void print_geometry(void) {
            ACE_PATROL_SPAN_X_MM, ACE_PATROL_SPAN_Y_MM);
     printf("Fahrgrenze     x +/-%.0f mm, y +/-%.0f mm\n",
            ACE_REACH_LIMIT_X_MM, ACE_REACH_LIMIT_Y_MM);
-    printf("Sichtbreite    %.0f mm\n", ACE_VIEW_WIDTH_MM);
+    double fov = 2.0 * atan2(ACE_VIEW_WIDTH_MM / 2.0, ACE_CAMERA_HEIGHT_MM)
+               * 180.0 / ACE_PI;
+    printf("Sichtbreite    %.0f mm auf %.0f mm Abstand  ->  %.0f Grad Blickwinkel\n",
+           ACE_VIEW_WIDTH_MM, ACE_CAMERA_HEIGHT_MM, fov);
+    if (fov < 45.0 || fov > 115.0) {
+        printf("               passt zu keinem ueblichen Pi-Kameramodul (53-102 Grad).\n"
+               "               ACE_VIEW_WIDTH_MM oder ACE_CAMERA_HEIGHT_MM pruefen.\n");
+    }
     printf("Startposition  x=%.0f y=%.0f mm\n", ACE_START_X_MM, ACE_START_Y_MM);
     printf("Bahnaufloesung %.0f mm je Teilstueck\n\n", ACE_SEGMENT_MM);
 }
