@@ -28,42 +28,76 @@ static void print_usage(const char *prog) {
         prog, def.h_min, def.h_max, def.s_min, def.s_max, def.v_min, def.v_max);
 }
 
+static const char *channel_hint(const PatchStats *p) {
+    if (p->r_mean > p->b_mean + 30) return "rotlastig";
+    if (p->b_mean > p->r_mean + 30) return "BLAULASTIG - R und B vertauscht?";
+    return "weder rot noch blau dominant";
+}
+
+static void print_patch(const char *label, const PatchStats *p) {
+    printf("  %-11s H %3d (%3d..%3d)  S %3d (%3d..%3d)  V %3d (%3d..%3d)"
+           "   B%3d G%3d R%3d  %s\n",
+           label,
+           p->h_med, p->h_lo, p->h_hi,
+           p->s_med, p->s_lo, p->s_hi,
+           p->v_med, p->v_lo, p->v_hi,
+           p->b_mean, p->g_mean, p->r_mean, channel_hint(p));
+}
+
+static int looks_red(const PatchStats *p) {
+    return p->hue_wraps || p->h_med >= 160 || p->h_med <= 12;
+}
+
+static void suggest(const PatchStats *p) {
+    int s_min = p->s_lo > 40 ? p->s_lo - 20 : 20;
+    int v_min = p->v_lo > 40 ? p->v_lo - 20 : 20;
+
+    if (looks_red(p)) {
+        printf("  -> Rot (Hue liegt am Rand der Skala). Vorschlag:\n"
+               "     --h-min 170 --h-max 10 --s-min %d --v-min %d\n", s_min, v_min);
+    } else {
+        printf("  -> Vorschlag: --h-min %d --h-max %d --s-min %d --v-min %d\n",
+               p->h_lo > 5 ? p->h_lo - 5 : 0,
+               p->h_hi < 174 ? p->h_hi + 5 : 179,
+               s_min, v_min);
+    }
+}
+
 static void print_probe(const ProbeResult *pr, const HsvRange *range) {
-    printf("  Bildmitte   H %3d (%d..%d)  S %3d (%d..%d)  V %3d (%d..%d)\n",
-           pr->h_med, pr->h_lo, pr->h_hi,
-           pr->s_med, pr->s_lo, pr->s_hi,
-           pr->v_med, pr->v_lo, pr->v_hi);
-    printf("  BGR-Mittel  B %3d  G %3d  R %3d   %s\n",
-           pr->b_mean, pr->g_mean, pr->r_mean,
-           pr->r_mean > pr->b_mean + 30 ? "(rotlastig, plausibel)"
-         : pr->b_mean > pr->r_mean + 30 ? "(BLAULASTIG - R und B vertauscht?)"
-         : "(weder rot noch blau dominant)");
-    printf("  Maske       %ld von %ld Pixeln (%.2f %%), groesste Flaeche %.0f px\n",
+    printf("  Maske       %ld von %ld Pixeln (%.2f %%), groesste Flaeche %.0f px"
+           "   [aktuell h %d-%d s %d-%d v %d-%d]\n",
            pr->mask_pixels, pr->frame_pixels,
            100.0 * (double)pr->mask_pixels / (double)pr->frame_pixels,
-           pr->best_area);
-    printf("  aktuell     h %d-%d  s %d-%d  v %d-%d\n",
+           pr->best_area,
            range->h_min, range->h_max, range->s_min, range->s_max,
            range->v_min, range->v_max);
 
-    if (pr->s_med < 60) {
-        printf("  -> Saettigung %d ist sehr niedrig. Das Objekt kommt grau an:\n"
-               "     zu wenig Licht, Weissabgleich, oder die Farbe ist blass.\n",
-               pr->s_med);
+    if (pr->blob_found) {
+        printf("  Fund bei    x=%.0f y=%.0f r=%.0f\n",
+               pr->blob_x, pr->blob_y, pr->blob_radius);
+        print_patch("im Fund", &pr->blob);
     }
-    if (pr->hue_wraps) {
-        printf("  -> Hue liegt an beiden Enden, also Rot. Vorschlag:\n"
-               "     --h-min 170 --h-max 10 --s-min %d --v-min %d\n",
-               pr->s_lo > 40 ? pr->s_lo - 20 : 20,
-               pr->v_lo > 40 ? pr->v_lo - 20 : 20);
-    } else {
-        int lo = pr->h_lo > 5 ? pr->h_lo - 5 : 0;
-        int hi = pr->h_hi < 174 ? pr->h_hi + 5 : 179;
-        printf("  -> Vorschlag: --h-min %d --h-max %d --s-min %d --v-min %d\n",
-               lo, hi,
-               pr->s_lo > 40 ? pr->s_lo - 20 : 20,
-               pr->v_lo > 40 ? pr->v_lo - 20 : 20);
+    print_patch("Bildmitte", &pr->centre);
+
+    if (!pr->blob_found) {
+        printf("  -> Nichts gefunden. Die Werte unten stammen aus der Bildmitte,\n"
+               "     also nur brauchbar, wenn das Objekt dort liegt.\n");
+        if (pr->centre.s_med < 60) {
+            printf("  -> Saettigung %d ist sehr niedrig: das Objekt kommt grau an.\n"
+                   "     Zu wenig Licht, Weissabgleich, oder die Farbe ist blass.\n",
+                   pr->centre.s_med);
+        }
+        suggest(&pr->centre);
+        return;
     }
+
+    if (pr->blob.s_med < 60) {
+        printf("  -> Der Fund ist kaum gesaettigt (S %d). Das ist vermutlich\n"
+               "     Hintergrund, kein farbiges Objekt.\n", pr->blob.s_med);
+    } else if (looks_red(&pr->blob)) {
+        printf("  -> Der Fund ist rot und klar gesaettigt. Passt.\n");
+    }
+    suggest(&pr->blob);
 }
 
 int main(int argc, char **argv) {

@@ -27,10 +27,16 @@ typedef struct {
         int  s_lo, s_hi;
         int  v_lo, v_hi;
         int  b_mean, g_mean, r_mean;
-        long mask_pixels;
-        long frame_pixels;
-        double best_area;
         bool hue_wraps;
+    } PatchStats;
+
+    typedef struct {
+        PatchStats centre;
+        PatchStats blob;
+        bool   blob_found;
+        double blob_x, blob_y, blob_radius, best_area;
+        long   mask_pixels;
+        long   frame_pixels;
     } ProbeResult;
 
     typedef struct BallDetector BallDetector;

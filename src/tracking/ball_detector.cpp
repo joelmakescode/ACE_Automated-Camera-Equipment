@@ -191,6 +191,43 @@ static int hue_median_circular(std::vector<unsigned char> hues) {
     return hues[hues.size() / 2];
 }
 
+static void patch_stats(const cv::Mat &hsv, const cv::Mat &bgr,
+                        cv::Rect roi, PatchStats *out) {
+    roi &= cv::Rect(0, 0, hsv.cols, hsv.rows);
+    if (roi.width <= 0 || roi.height <= 0) { *out = PatchStats{}; return; }
+
+    cv::Mat patch = hsv(roi);
+    std::vector<unsigned char> hs, ss, vs;
+    hs.reserve(roi.area()); ss.reserve(roi.area()); vs.reserve(roi.area());
+    for (int y = 0; y < patch.rows; ++y) {
+        const cv::Vec3b *row = patch.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < patch.cols; ++x) {
+            hs.push_back(row[x][0]); ss.push_back(row[x][1]); vs.push_back(row[x][2]);
+        }
+    }
+
+    out->h_med = hue_median_circular(hs);
+
+    std::sort(hs.begin(), hs.end());
+    std::sort(ss.begin(), ss.end());
+    std::sort(vs.begin(), vs.end());
+
+    out->h_lo = percentile(hs, 0.05);
+    out->h_hi = percentile(hs, 0.95);
+    out->s_lo = percentile(ss, 0.05);
+    out->s_hi = percentile(ss, 0.95);
+    out->v_lo = percentile(vs, 0.05);
+    out->v_hi = percentile(vs, 0.95);
+    out->s_med = percentile(ss, 0.5);
+    out->v_med = percentile(vs, 0.5);
+    out->hue_wraps = (out->h_lo <= 30 && out->h_hi >= 150);
+
+    cv::Scalar m = cv::mean(bgr(roi));
+    out->b_mean = static_cast<int>(m[0]);
+    out->g_mean = static_cast<int>(m[1]);
+    out->r_mean = static_cast<int>(m[2]);
+}
+
 extern "C" int bd_probe(BallDetector *bd, const HsvRange *range, int window_px,
                         ProbeResult *out) {
     if (!bd || !range || !out) return -1;
@@ -200,54 +237,39 @@ extern "C" int bd_probe(BallDetector *bd, const HsvRange *range, int window_px,
 
     build_mask(bd, *frame_ptr, range);
 
-    int w = window_px > 0 ? window_px : 80;
-    cv::Rect centre((frame_ptr->cols - w) / 2, (frame_ptr->rows - w) / 2, w, w);
-    centre &= cv::Rect(0, 0, frame_ptr->cols, frame_ptr->rows);
-    if (centre.width <= 0 || centre.height <= 0) return -1;
-
-    cv::Mat patch_hsv = bd->hsv_buf(centre);
-    cv::Mat patch_bgr = (*frame_ptr)(centre);
-
-    std::vector<unsigned char> hs, ss, vs;
-    hs.reserve(centre.area()); ss.reserve(centre.area()); vs.reserve(centre.area());
-    for (int y = 0; y < patch_hsv.rows; ++y) {
-        const cv::Vec3b *row = patch_hsv.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < patch_hsv.cols; ++x) {
-            hs.push_back(row[x][0]); ss.push_back(row[x][1]); vs.push_back(row[x][2]);
-        }
-    }
-
-    out->h_med = hue_median_circular(hs);
-
-    std::vector<unsigned char> hs_sorted = hs;
-    std::sort(hs_sorted.begin(), hs_sorted.end());
-    std::sort(ss.begin(), ss.end());
-    std::sort(vs.begin(), vs.end());
-
-    out->h_lo = percentile(hs_sorted, 0.05);
-    out->h_hi = percentile(hs_sorted, 0.95);
-    out->s_lo = percentile(ss, 0.05);
-    out->s_hi = percentile(ss, 0.95);
-    out->v_lo = percentile(vs, 0.05);
-    out->v_hi = percentile(vs, 0.95);
-    out->s_med = percentile(ss, 0.5);
-    out->v_med = percentile(vs, 0.5);
-    out->hue_wraps = (out->h_lo <= 30 && out->h_hi >= 150);
-
-    cv::Scalar bgr = cv::mean(patch_bgr);
-    out->b_mean = static_cast<int>(bgr[0]);
-    out->g_mean = static_cast<int>(bgr[1]);
-    out->r_mean = static_cast<int>(bgr[2]);
-
+    *out = ProbeResult{};
     out->mask_pixels  = cv::countNonZero(bd->mask_buf);
     out->frame_pixels = static_cast<long>(bd->mask_buf.total());
 
+    int w = window_px > 0 ? window_px : 80;
+    patch_stats(bd->hsv_buf, *frame_ptr,
+                cv::Rect((frame_ptr->cols - w) / 2, (frame_ptr->rows - w) / 2, w, w),
+                &out->centre);
+
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(bd->mask_buf, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    out->best_area = 0.0;
-    for (const auto &c : contours) {
-        double a = cv::contourArea(c);
-        if (a > out->best_area) out->best_area = a;
+
+    size_t best_idx = 0;
+    for (size_t i = 0; i < contours.size(); ++i) {
+        double a = cv::contourArea(contours[i]);
+        if (a > out->best_area) { out->best_area = a; best_idx = i; }
+    }
+
+    if (out->best_area >= MIN_CONTOUR_AREA) {
+        cv::Point2f c;
+        float r = 0.0f;
+        cv::minEnclosingCircle(contours[best_idx], c, r);
+        out->blob_found  = true;
+        out->blob_x      = c.x;
+        out->blob_y      = c.y;
+        out->blob_radius = r;
+
+        int side = static_cast<int>(r);
+        if (side < 8) side = 8;
+        patch_stats(bd->hsv_buf, *frame_ptr,
+                    cv::Rect(static_cast<int>(c.x) - side / 2,
+                             static_cast<int>(c.y) - side / 2, side, side),
+                    &out->blob);
     }
     return 0;
 }
