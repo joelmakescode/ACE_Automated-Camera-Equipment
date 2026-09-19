@@ -34,8 +34,8 @@ struct BallDetector {
 
 extern "C" HsvRange bd_default_hsv_range(void) {
     HsvRange range;
-    range.h_min = 5; range.s_min = 100; range.v_min = 100;
-    range.h_max = 25; range.s_max = 255; range.v_max = 255;
+    range.h_min = 170; range.s_min = 120; range.v_min = 70;
+    range.h_max = 10;  range.s_max = 255; range.v_max = 255;
     return range;
 }
 

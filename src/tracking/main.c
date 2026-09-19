@@ -5,13 +5,21 @@
 #include "ball_detector.h"
 
 static void print_usage(const char *prog) {
+    HsvRange def = bd_default_hsv_range();
+
     fprintf(stderr,
         "Verwendung: %s [--device /dev/video0 | --image pfad.jpg]\n"
         "               [--width N] [--height N] [--frames N]\n"
         "               [--h-min N] [--h-max N] [--s-min N] [--s-max N]\n"
         "               [--v-min N] [--v-max N] [--save-frame pfad.jpg]\n"
-        "               [--stream [port]]\n",
-        prog);
+        "               [--stream [port]]\n"
+        "\n"
+        "Farbe: Standard ist Rot auf hellem Grund, h %d-%d s %d-%d v %d-%d.\n"
+        "       Ist h-min groesser als h-max, wird ueber den Nullpunkt hinweg\n"
+        "       gesucht, also h-min..179 und 0..h-max. Genau so wird Rot\n"
+        "       erfasst, das an beiden Enden der Hue-Skala liegt.\n"
+        "       Mit --stream laesst sich der Bereich am Livebild pruefen.\n",
+        prog, def.h_min, def.h_max, def.s_min, def.s_max, def.v_min, def.v_max);
 }
 
 int main(int argc, char **argv) {

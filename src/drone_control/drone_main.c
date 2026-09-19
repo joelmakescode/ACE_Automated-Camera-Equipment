@@ -25,6 +25,8 @@ static void on_signal(int sig) {
 }
 
 static void print_usage(const char *prog) {
+    HsvRange def = bd_default_hsv_range();
+
     fprintf(stderr,
         "Verwendung: %s [--device /dev/video0] [--width N] [--height N]\n"
         "               [--h-min N] [--h-max N] [--s-min N] [--s-max N]\n"
@@ -44,9 +46,17 @@ static void print_usage(const char *prog) {
         "              Sichtbreite bestimmt werden, nicht der Wickeldurchmesser\n"
         "  --delay-us  Zeit pro Halbschritt, Standard %u us (Minimum %u us)\n"
         "  --dry-run   Motorphasen nur ausgeben, GPIO nicht anfassen\n"
-        "  --quiet     keine Statuszeile pro Frame\n",
+        "  --quiet     keine Statuszeile pro Frame\n"
+        "\n"
+        "Farbe: Standard ist Rot auf hellem Grund, h %d-%d s %d-%d v %d-%d.\n"
+        "       Rot liegt an beiden Enden der Hue-Skala. Ist h-min groesser als\n"
+        "       h-max, sucht der Detektor darum in beiden Bereichen, also\n"
+        "       h-min..179 und 0..h-max. Die Saettigung trennt das Objekt vom\n"
+        "       hellen Hintergrund: Weiss und Grau haben kaum Saettigung.\n"
+        "       Spricht nichts an, zuerst s-min senken, dann v-min.\n",
         prog, ACE_CALIBRATION_DISTANCE_MM, ACE_CALIBRATION_DISTANCE_MM,
-        ACE_TRAVEL_DELAY_US, ACE_MIN_STEP_DELAY_US);
+        ACE_TRAVEL_DELAY_US, ACE_MIN_STEP_DELAY_US,
+        def.h_min, def.h_max, def.s_min, def.s_max, def.v_min, def.v_max);
 }
 
 static void print_geometry(void) {
