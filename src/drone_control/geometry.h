@@ -94,6 +94,10 @@
 #define ACE_CALIBRATION_MAX_FRAMES 60
 #endif
 
+#ifndef ACE_OBJECT_DIAMETER_MM
+#define ACE_OBJECT_DIAMETER_MM 0.0
+#endif
+
 #ifndef ACE_TENSION_MM
 #define ACE_TENSION_MM 1.0
 #endif

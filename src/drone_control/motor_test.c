@@ -22,7 +22,7 @@ static void on_signal(int sig) {
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
-        "Verwendung: %s [--pattern single|all|sync|ratio|square]\n"
+        "Verwendung: %s [--pattern single|all|sync|ratio|square|drum]\n"
         "               [--motor 0..%d] [--steps N | --revs N] [--dir cw|ccw]\n"
         "               [--delay-us N] [--hold] [--dry-run]\n"
         "\n"
@@ -32,6 +32,8 @@ static void print_usage(const char *prog) {
         "  sync     alle vier gleichzeitig, gleiche Schrittzahl\n"
         "  ratio    alle vier gleichzeitig, ungleiche Schrittzahl\n"
         "  square   vier Kanten, je zwei Seile auf und zwei ab\n"
+        "  drum     ein Seil um --revs Umdrehungen abwickeln, zum Ausmessen\n"
+        "           des tatsaechlichen Wickeldurchmessers mit dem Lineal\n"
         "\n"
         "Optionen:\n"
         "  --steps    Halbschritte, Standard %d (= eine Umdrehung)\n"
@@ -127,6 +129,26 @@ static int pattern_ratio(long steps[ACE_MOTOR_COUNT], long count, unsigned int d
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) steps[i] = -steps[i];
     return run_move("ungleich zurueck", steps, delay_us);
+}
+
+static int pattern_drum(long steps[ACE_MOTOR_COUNT], int motor, long count,
+                        int dir, unsigned int delay_us) {
+    char label[64];
+    double revs = (double)count / (double)ACE_HALFSTEPS_PER_REV;
+
+    snprintf(label, sizeof(label), "Motor %d, %.2f Umdrehungen", motor, revs);
+    steps_clear(steps);
+    steps[motor] = dir * count;
+
+    int rc = run_move(label, steps, delay_us);
+    if (rc != 0) return rc;
+
+    printf("\nAbgewickeltes Seil messen, dann:\n");
+    printf("  Wickeldurchmesser = gemessene Laenge in mm / (%.2f * 3.1416)\n", revs);
+    printf("                    = gemessene Laenge in mm / %.3f\n", revs * ACE_PI);
+    printf("Der Wert gehoert als ACE_DRUM_DIAMETER_MM in geometry.h.\n");
+    printf("Wickelt der Motor auf statt ab, nochmal mit --dir ccw.\n");
+    return 0;
 }
 
 static int pattern_square(long steps[ACE_MOTOR_COUNT], long n, unsigned int delay_us) {
@@ -225,6 +247,8 @@ int main(int argc, char **argv) {
         rc = pattern_sync(steps, count, delay_us);
     } else if (strcmp(pattern, "ratio") == 0) {
         rc = pattern_ratio(steps, count, delay_us);
+    } else if (strcmp(pattern, "drum") == 0) {
+        rc = pattern_drum(steps, motor, count, dir, delay_us);
     } else if (strcmp(pattern, "square") == 0) {
         rc = pattern_square(steps, count, delay_us);
     } else {

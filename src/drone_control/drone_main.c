@@ -36,6 +36,9 @@ static void print_usage(const char *prog) {
         "  --center    nur in die Mitte fahren und anspannen, ohne Messung\n"
         "  --at X,Y    wo die Plattform gerade haengt, Standard 0,0 (Mitte)\n"
         "  --calib-mm  Kalibrierweg in mm, Standard %.0f\n"
+        "  --object-mm Durchmesser des Kalibrierobjekts in mm (rundes farbiges\n"
+        "              Ding, kein Ball noetig). Ohne diese Angabe kann nur die\n"
+        "              Sichtbreite bestimmt werden, nicht der Wickeldurchmesser\n"
         "  --delay-us  Zeit pro Halbschritt, Standard %u us (Minimum %u us)\n"
         "  --dry-run   Motorphasen nur ausgeben, GPIO nicht anfassen\n"
         "  --quiet     keine Statuszeile pro Frame\n",
@@ -79,6 +82,7 @@ int main(int argc, char **argv) {
     double       at_x        = 0.0;
     double       at_y        = 0.0;
     double       calib_mm    = ACE_CALIBRATION_DISTANCE_MM;
+    double       object_mm   = ACE_OBJECT_DIAMETER_MM;
 
     HsvRange range = bd_default_hsv_range();
 
@@ -94,6 +98,7 @@ int main(int argc, char **argv) {
         {"center",    no_argument,       0, 'C'},
         {"at",        required_argument, 0, 'a'},
         {"calib-mm",  required_argument, 0, 'D'},
+        {"object-mm", required_argument, 0, 'O'},
         {"h-min",    required_argument, 0, 1},
         {"h-max",    required_argument, 0, 2},
         {"s-min",    required_argument, 0, 3},
@@ -105,7 +110,7 @@ int main(int argc, char **argv) {
     };
 
     int opt, opt_index = 0;
-    while ((opt = getopt_long(argc, argv, "d:w:h:t::u:nqcCa:D:", long_opts, &opt_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:w:h:t::u:nqcCa:D:O:", long_opts, &opt_index)) != -1) {
         switch (opt) {
             case 'd': device   = optarg; break;
             case 'w': width    = atoi(optarg); break;
@@ -116,6 +121,7 @@ int main(int argc, char **argv) {
             case 'c': mode_cal    = 1; break;
             case 'C': mode_center = 1; break;
             case 'D': calib_mm    = atof(optarg); break;
+            case 'O': object_mm   = atof(optarg); break;
             case 'a':
                 if (sscanf(optarg, "%lf,%lf", &at_x, &at_y) != 2) {
                     fprintf(stderr, "--at erwartet X,Y in mm, z.B. --at 80,-40\n");
@@ -164,7 +170,7 @@ int main(int argc, char **argv) {
 
     if (mode_cal || mode_center) {
         int cal_rc = mode_cal
-            ? cal_run(detector, &range, width, at_x, at_y, calib_mm, delay_us)
+            ? cal_run(detector, &range, width, at_x, at_y, calib_mm, object_mm, delay_us)
             : cal_center(detector, &range, at_x, at_y, delay_us);
 
         if (!g_abort) {

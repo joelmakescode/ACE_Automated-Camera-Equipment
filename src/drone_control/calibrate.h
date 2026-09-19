@@ -13,7 +13,8 @@ int cal_center(BallDetector *detector, const HsvRange *range,
 
 int cal_run(BallDetector *detector, const HsvRange *range,
             int frame_width, double start_x_mm, double start_y_mm,
-            double distance_mm, unsigned int step_delay_us);
+            double distance_mm, double object_diameter_mm,
+            unsigned int step_delay_us);
 
 #ifdef __cplusplus
 }
