@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -77,31 +78,28 @@ extern "C" BallDetector *bd_create_from_image(const char *image_path) {
 
 static constexpr double MIN_CONTOUR_AREA = 50.0;
 
-extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResult *out_result) {
-    if (!bd || !range || !out_result) return -1;
+static bool g_view_mask = false;
 
-    out_result->found = false;
-    out_result->x = 0.0;
-    out_result->y = 0.0;
-    out_result->radius = 0.0;
+extern "C" void bd_set_view_mask(int enabled) {
+    g_view_mask = enabled != 0;
+}
 
-    const cv::Mat *frame_ptr;
-    if (bd->use_camera) {
-        size_t n = std::fread(bd->yuv_buf.data(), 1, bd->yuv_buf.size(), bd->pipe);
-        if (n != bd->yuv_buf.size()) {
-            std::fprintf(stderr, "Failed to read frame from rpicam-vid\n");
-            return -1;
-        }
+static const cv::Mat *grab_frame(BallDetector *bd) {
+    if (!bd->use_camera) return &bd->static_image;
 
-        cv::Mat yuv(bd->cam_height * 3 / 2, bd->cam_width, CV_8UC1, bd->yuv_buf.data());
-        cv::cvtColor(yuv, bd->frame_buf, cv::COLOR_YUV2BGR_I420);
-        frame_ptr = &bd->frame_buf;
-    }
-    else {
-        frame_ptr = &bd->static_image;
+    size_t n = std::fread(bd->yuv_buf.data(), 1, bd->yuv_buf.size(), bd->pipe);
+    if (n != bd->yuv_buf.size()) {
+        std::fprintf(stderr, "Failed to read frame from rpicam-vid\n");
+        return nullptr;
     }
 
-    cv::cvtColor(*frame_ptr, bd->hsv_buf, cv::COLOR_BGR2HSV);
+    cv::Mat yuv(bd->cam_height * 3 / 2, bd->cam_width, CV_8UC1, bd->yuv_buf.data());
+    cv::cvtColor(yuv, bd->frame_buf, cv::COLOR_YUV2BGR_I420);
+    return &bd->frame_buf;
+}
+
+static void build_mask(BallDetector *bd, const cv::Mat &frame, const HsvRange *range) {
+    cv::cvtColor(frame, bd->hsv_buf, cv::COLOR_BGR2HSV);
     if (range->h_min <= range->h_max) {
         cv::inRange(bd->hsv_buf, cv::Scalar(range->h_min, range->s_min, range->v_min), cv::Scalar(range->h_max, range->s_max, range->v_max), bd->mask_buf);
     } else {
@@ -120,6 +118,20 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
     cv::morphologyEx(bd->mask_buf, bd->mask_buf, cv::MORPH_OPEN, kernel);
     cv::morphologyEx(bd->mask_buf, bd->mask_buf, cv::MORPH_CLOSE, kernel);
+}
+
+extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResult *out_result) {
+    if (!bd || !range || !out_result) return -1;
+
+    out_result->found = false;
+    out_result->x = 0.0;
+    out_result->y = 0.0;
+    out_result->radius = 0.0;
+
+    const cv::Mat *frame_ptr = grab_frame(bd);
+    if (!frame_ptr) return -1;
+
+    build_mask(bd, *frame_ptr, range);
 
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(bd->mask_buf, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
@@ -153,6 +165,93 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
     return 0;
 }
 
+static int percentile(const std::vector<unsigned char> &sorted, double q) {
+    if (sorted.empty()) return 0;
+    size_t i = static_cast<size_t>(q * (sorted.size() - 1));
+    return sorted[i];
+}
+
+static int hue_median_circular(std::vector<unsigned char> hues) {
+    if (hues.empty()) return 0;
+
+    size_t near_zero = 0, near_top = 0;
+    for (unsigned char h : hues) {
+        if (h <= 30)       near_zero++;
+        else if (h >= 150) near_top++;
+    }
+
+    if (near_zero > 0 && near_top > 0 && near_zero + near_top > hues.size() / 2) {
+        long sum = 0;
+        for (unsigned char h : hues) sum += (h >= 90) ? (int)h - 180 : (int)h;
+        int m = static_cast<int>(sum / (long)hues.size());
+        return (m < 0) ? m + 180 : m;
+    }
+
+    std::sort(hues.begin(), hues.end());
+    return hues[hues.size() / 2];
+}
+
+extern "C" int bd_probe(BallDetector *bd, const HsvRange *range, int window_px,
+                        ProbeResult *out) {
+    if (!bd || !range || !out) return -1;
+
+    const cv::Mat *frame_ptr = grab_frame(bd);
+    if (!frame_ptr) return -1;
+
+    build_mask(bd, *frame_ptr, range);
+
+    int w = window_px > 0 ? window_px : 80;
+    cv::Rect centre((frame_ptr->cols - w) / 2, (frame_ptr->rows - w) / 2, w, w);
+    centre &= cv::Rect(0, 0, frame_ptr->cols, frame_ptr->rows);
+    if (centre.width <= 0 || centre.height <= 0) return -1;
+
+    cv::Mat patch_hsv = bd->hsv_buf(centre);
+    cv::Mat patch_bgr = (*frame_ptr)(centre);
+
+    std::vector<unsigned char> hs, ss, vs;
+    hs.reserve(centre.area()); ss.reserve(centre.area()); vs.reserve(centre.area());
+    for (int y = 0; y < patch_hsv.rows; ++y) {
+        const cv::Vec3b *row = patch_hsv.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < patch_hsv.cols; ++x) {
+            hs.push_back(row[x][0]); ss.push_back(row[x][1]); vs.push_back(row[x][2]);
+        }
+    }
+
+    out->h_med = hue_median_circular(hs);
+
+    std::vector<unsigned char> hs_sorted = hs;
+    std::sort(hs_sorted.begin(), hs_sorted.end());
+    std::sort(ss.begin(), ss.end());
+    std::sort(vs.begin(), vs.end());
+
+    out->h_lo = percentile(hs_sorted, 0.05);
+    out->h_hi = percentile(hs_sorted, 0.95);
+    out->s_lo = percentile(ss, 0.05);
+    out->s_hi = percentile(ss, 0.95);
+    out->v_lo = percentile(vs, 0.05);
+    out->v_hi = percentile(vs, 0.95);
+    out->s_med = percentile(ss, 0.5);
+    out->v_med = percentile(vs, 0.5);
+    out->hue_wraps = (out->h_lo <= 30 && out->h_hi >= 150);
+
+    cv::Scalar bgr = cv::mean(patch_bgr);
+    out->b_mean = static_cast<int>(bgr[0]);
+    out->g_mean = static_cast<int>(bgr[1]);
+    out->r_mean = static_cast<int>(bgr[2]);
+
+    out->mask_pixels  = cv::countNonZero(bd->mask_buf);
+    out->frame_pixels = static_cast<long>(bd->mask_buf.total());
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(bd->mask_buf, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    out->best_area = 0.0;
+    for (const auto &c : contours) {
+        double a = cv::contourArea(c);
+        if (a > out->best_area) out->best_area = a;
+    }
+    return 0;
+}
+
 static cv::Mat draw_overlay(const cv::Mat &frame, const DetectionResult *result) {
     cv::Mat annotated = frame.clone();
     if (result->found) {
@@ -164,13 +263,23 @@ static cv::Mat draw_overlay(const cv::Mat &frame, const DetectionResult *result)
     return annotated;
 }
 
+static cv::Mat view_for_output(BallDetector *bd, const DetectionResult *result) {
+    const cv::Mat &frame = bd->use_camera ? bd->frame_buf : bd->static_image;
+    if (frame.empty()) return cv::Mat();
+
+    if (g_view_mask && !bd->mask_buf.empty()) {
+        cv::Mat shown;
+        cv::cvtColor(bd->mask_buf, shown, cv::COLOR_GRAY2BGR);
+        return draw_overlay(shown, result);
+    }
+    return draw_overlay(frame, result);
+}
+
 extern "C" int bd_save_annotated(BallDetector *bd, const DetectionResult *result, const char *out_path) {
     if (!bd || !result || !out_path) return -1;
 
-    const cv::Mat &frame = bd->use_camera ? bd->frame_buf : bd->static_image;
-    if (frame.empty()) return -1;
-
-    cv::Mat annotated = draw_overlay(frame, result);
+    cv::Mat annotated = view_for_output(bd, result);
+    if (annotated.empty()) return -1;
     return cv::imwrite(out_path, annotated) ? 0 : -1;
 }
 
@@ -265,10 +374,8 @@ extern "C" int bd_stream_start(int port) {
 extern "C" int bd_stream_push(BallDetector *bd, const DetectionResult *result) {
     if (!bd || !result || !g_stream_running) return -1;
 
-    const cv::Mat &frame = bd->use_camera ? bd->frame_buf : bd->static_image;
-    if (frame.empty()) return -1;
-
-    cv::Mat annotated = draw_overlay(frame, result);
+    cv::Mat annotated = view_for_output(bd, result);
+    if (annotated.empty()) return -1;
 
     std::vector<uchar> jpeg_buf;
     cv::imencode(".jpg", annotated, jpeg_buf);

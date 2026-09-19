@@ -21,11 +21,28 @@ typedef struct {
         double radius;
     } DetectionResult;
 
+    typedef struct {
+        int  h_med, s_med, v_med;
+        int  h_lo, h_hi;
+        int  s_lo, s_hi;
+        int  v_lo, v_hi;
+        int  b_mean, g_mean, r_mean;
+        long mask_pixels;
+        long frame_pixels;
+        double best_area;
+        bool hue_wraps;
+    } ProbeResult;
+
     typedef struct BallDetector BallDetector;
     BallDetector *bd_create_camera(const char *device_path, int width, int height);
     BallDetector *bd_create_from_image(const char *image_path);
 
     int bd_detect(BallDetector *detector, const HsvRange *range, DetectionResult *result);
+
+    int bd_probe(BallDetector *detector, const HsvRange *range, int window_px,
+                 ProbeResult *result);
+
+    void bd_set_view_mask(int enabled);
 
     int bd_save_annotated(BallDetector *detector, const DetectionResult *result, const char *out_path);
 
