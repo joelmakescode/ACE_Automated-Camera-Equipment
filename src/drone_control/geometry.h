@@ -142,4 +142,53 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_TRAVEL_DELAY_US 2500u
 #endif
 
+/* ---- Figurenfahrt ohne Kamera (ace_figure) ---------------------------- */
+
+/* Kantenlaenge des X, volle Spanne. Die halbe Spanne ist der Abstand
+ * Mitte -> Diagonalspitze. 240 mm halten die am weitesten entfernte Winde
+ * noch deutlich ueber ACE_MIN_CABLE_TENSION; bei der Suchfahrtspanne von
+ * 300 mm faellt sie auf rund 17 % des Plattformgewichts. */
+#ifndef ACE_FIGURE_SPAN_X_MM
+#define ACE_FIGURE_SPAN_X_MM 240.0
+#endif
+
+#ifndef ACE_FIGURE_SPAN_Y_MM
+#define ACE_FIGURE_SPAN_Y_MM 240.0
+#endif
+
+/* Pause an jeder Spitze, damit die Plattform ausschwingt, bevor der
+ * naechste Abschnitt aus den Schrittzaehlern geplant wird. */
+#ifndef ACE_FIGURE_SETTLE_MS
+#define ACE_FIGURE_SETTLE_MS 400
+#endif
+
+/* Sekunden Vorlauf nach dem Start, damit man die Plattform loslassen kann. */
+#ifndef ACE_FIGURE_WAIT_S
+#define ACE_FIGURE_WAIT_S 3
+#endif
+
+/* Unterhalb dieses Seilzugs, gemessen in Vielfachen des Plattformgewichts,
+ * gilt ein Seil als zu lose: es traegt dann kaum noch, sein Schrittzaehler
+ * beschreibt die Lage nicht mehr. */
+#ifndef ACE_MIN_CABLE_TENSION
+#define ACE_MIN_CABLE_TENSION 0.05
+#endif
+
+/* Groesster Hoehenwiderspruch zwischen den vier Seilen, der waehrend der
+ * Fahrt hingenommen wird. Darueber ziehen die Winden gegeneinander. */
+#ifndef ACE_MAX_HEIGHT_SPREAD_MM
+#define ACE_MAX_HEIGHT_SPREAD_MM 1.0
+#endif
+
+/* Haltemoment einer Winde in Nmm. 28BYJ-48 mit ULN2003 an 5 V liefert laut
+ * Datenblatt rund 34 Nmm, allerdings nur bei sehr langsamem Lauf. Bei
+ * Betriebsdrehzahl bleibt spuerbar weniger uebrig. */
+#ifndef ACE_MOTOR_TORQUE_NMM
+#define ACE_MOTOR_TORQUE_NMM 34.0
+#endif
+
+#ifndef ACE_GRAVITY_MM_S2
+#define ACE_GRAVITY_MM_S2 9810.0
+#endif
+
 #endif

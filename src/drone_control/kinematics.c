@@ -50,25 +50,64 @@ static double current_length(int motor, const long motor_steps[ACE_MOTOR_COUNT])
     return g_reference_length[motor] - (double)wound * ACE_MM_PER_HALFSTEP_AT(motor);
 }
 
-static double axis_position(int axis, double span,
-                            const long motor_steps[ACE_MOTOR_COUNT]) {
+void kin_lengths(const long motor_steps[ACE_MOTOR_COUNT],
+                 double lengths[ACE_MOTOR_COUNT]) {
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
+        lengths[i] = current_length(i, motor_steps);
+    }
+}
+
+/* Zwei Anker mit gleicher Gegenkoordinate spannen eine Achse auf. Aus der
+ * Differenz der Laengenquadrate faellt die Hoehe heraus, uebrig bleibt die
+ * Achslage. Zwei unabhaengige Paare je Achse werden gemittelt. */
+static double axis_from_lengths(int axis, double span,
+                                const double lengths[ACE_MOTOR_COUNT]) {
     int pairs[ACE_MOTOR_COUNT][2];
     int count = find_axis_pairs(axis, pairs);
     if (count == 0) return 0.0;
 
     double sum = 0.0;
     for (int p = 0; p < count; p++) {
-        double a = current_length(pairs[p][0], motor_steps);
-        double b = current_length(pairs[p][1], motor_steps);
+        double a = lengths[pairs[p][0]];
+        double b = lengths[pairs[p][1]];
         sum += (a * a - b * b) / (2.0 * span);
     }
     return sum / (double)count;
 }
 
+void kin_position_from_lengths(const double lengths[ACE_MOTOR_COUNT],
+                               double *x_mm, double *y_mm) {
+    if (x_mm) *x_mm = axis_from_lengths(0, ACE_ANCHOR_SPAN_X_MM, lengths);
+    if (y_mm) *y_mm = axis_from_lengths(1, ACE_ANCHOR_SPAN_Y_MM, lengths);
+}
+
 void kin_position(const long motor_steps[ACE_MOTOR_COUNT],
                   double *x_mm, double *y_mm) {
-    if (x_mm) *x_mm = axis_position(0, ACE_ANCHOR_SPAN_X_MM, motor_steps);
-    if (y_mm) *y_mm = axis_position(1, ACE_ANCHOR_SPAN_Y_MM, motor_steps);
+    double lengths[ACE_MOTOR_COUNT];
+    kin_lengths(motor_steps, lengths);
+    kin_position_from_lengths(lengths, x_mm, y_mm);
+}
+
+double kin_implied_height(int motor, double x_mm, double y_mm, double length_mm) {
+    if (motor < 0 || motor >= ACE_MOTOR_COUNT) return 0.0;
+
+    double dx   = x_mm - anchor_x(motor);
+    double dy   = y_mm - anchor_y(motor);
+    double rest = length_mm * length_mm - dx * dx - dy * dy;
+
+    return (rest > 0.0) ? sqrt(rest) : 0.0;
+}
+
+double kin_height_spread(const double lengths[ACE_MOTOR_COUNT],
+                         double x_mm, double y_mm) {
+    double lo = 0.0, hi = 0.0;
+
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
+        double z = kin_implied_height(i, x_mm, y_mm, lengths[i]);
+        if (i == 0 || z < lo) lo = z;
+        if (i == 0 || z > hi) hi = z;
+    }
+    return hi - lo;
 }
 
 void kin_clamp(double *x_mm, double *y_mm) {

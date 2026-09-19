@@ -30,6 +30,11 @@ void motion_set_idle_hook(MotionIdleHook hook);
 bool motion_busy(void);
 long motion_position(int motor);
 
+/* Alle vier Schrittzaehler unter einer einzigen Sperre. Einzeln gelesen
+ * koennen sie aus verschiedenen Takten stammen; fuer alles, was die vier
+ * Seillaengen gegeneinander rechnet, ist das ein kuenstlicher Widerspruch. */
+void motion_positions(long out[ACE_MOTOR_COUNT]);
+
 void motion_hold(void);
 void motion_release(void);
 

@@ -26,6 +26,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(ace_motor_test PRIVATE src/drone_control)
     target_link_libraries(ace_motor_test PRIVATE Threads::Threads m)
 
+    # Figurenfahrt ohne Kamera: braucht kein OpenCV.
+    add_executable(ace_figure
+        src/drone_control/figure_main.c
+        src/drone_control/figure.c
+        src/drone_control/kinematics.c
+        src/drone_control/path.c
+        src/drone_control/motion.c
+        src/drone_control/stepper.c
+    )
+    target_include_directories(ace_figure PRIVATE src/drone_control)
+    target_link_libraries(ace_figure PRIVATE Threads::Threads m)
+
     add_executable(ace_drone
         src/drone_control/drone_main.c
         src/drone_control/navigator.c
@@ -43,5 +55,5 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_link_libraries(ace_drone PRIVATE ${OpenCV_LIBS} Threads::Threads m)
 else()
-    message(STATUS "ace_motor_test und ace_drone werden uebersprungen (nur Linux/Raspberry Pi).")
+    message(STATUS "ace_motor_test, ace_figure und ace_drone werden uebersprungen (nur Linux/Raspberry Pi).")
 endif()

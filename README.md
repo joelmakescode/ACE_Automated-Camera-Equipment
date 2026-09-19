@@ -50,6 +50,49 @@ Ziel des Projekts ist die Entwicklung eines intelligenten Kamerasystems, das Obj
 └── README.md
 ```
 
+## Figurenfahrt ohne Kamera (`ace_figure`)
+
+Eigenständiges Programm, das ohne Kamera und ohne OpenCV auskommt. Die Plattform
+wird von Hand in die Mitte des Ankerfelds gestellt, dort setzt das Programm
+seinen Nullpunkt, und danach fährt es ein X: vier Speichen Mitte → Spitze →
+Mitte. Gedacht zum Einmessen der Mechanik, bevor die Bilderkennung dazukommt.
+
+```sh
+./ace_figure --plan-only            # nur rechnen, nichts bewegen
+./ace_figure --size 120,120         # X mit 120 mm Speichenlänge fahren
+./ace_figure --dry-run --wait 0     # Phasenfolge ausgeben, GPIO nicht anfassen
+./ace_figure --mass-g 250 --loops 3 # Winden gegen 250 g prüfen, dreimal fahren
+```
+
+### Warum die dritte Dimension mitgerechnet wird
+
+Die Seillänge ist die räumliche Strecke Anker → Plattform, also
+`sqrt(dx² + dy² + h²)` — sie hängt nicht linear an x und y. Lässt man die vier
+Winden stur von A nach B durchlaufen, passen ihre Längen unterwegs zu keinem
+gemeinsamen Punkt im Raum mehr: jedes Seil fordert eine andere Höhe. Zwei Seile
+werden lose, die Plattform sackt ab und pendelt.
+
+Deshalb wird jede Teilfahrt in Stücke von `ACE_SEGMENT_MM` zerlegt und an jedem
+Wegpunkt aus der vollen 3D-Formel neu geplant. `ace_figure` rechnet beide
+Varianten vorher durch und stellt sie gegenüber — bei der Standardgeometrie:
+
+| Fahrt Mitte → Spitze (170 mm) | quer zur Geraden | Höhenwiderspruch |
+| ----------------------------- | ---------------- | ---------------- |
+| naiv, ein Stück               | 0,46 mm          | **16,5 mm**      |
+| geplant, 34 Stücke à 5 mm     | 0,007 mm         | 0,03 mm          |
+
+Während der Fahrt wird derselbe Wert laufend aus den Schrittzählern gebildet und
+gewarnt, sobald er `ACE_MAX_HEIGHT_SPREAD_MM` übersteigt.
+
+### Statik
+
+Aus dem Kräftegleichgewicht am Massepunkt folgt, dass die von den vier Seilen
+getragenen Gewichtsanteile die baryzentrischen Koordinaten der Plattform im
+Ankerrechteck sind. Der Zug im Seil ist um `l/h` größer als der getragene
+Anteil, weil die Seile flach liegen. `ace_figure` gibt beides je Wegpunkt aus
+und warnt, wenn ein Seil unter `ACE_MIN_CABLE_TENSION` fällt und damit lose
+wird — dann beschreibt sein Schrittzähler die Lage nicht mehr.
+
 ## Funktionsweise
 
 1. Die Kamera erfasst kontinuierlich das Sichtfeld.

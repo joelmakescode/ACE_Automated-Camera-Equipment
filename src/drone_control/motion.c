@@ -267,6 +267,16 @@ long motion_position(int motor) {
     return pos;
 }
 
+void motion_positions(long out[ACE_MOTOR_COUNT]) {
+    if (!out) return;
+
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
+        out[i] = stepper_position(g_motors[i]);
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
 void motion_hold(void) {
     pthread_mutex_lock(&g_lock);
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) stepper_hold(g_motors[i]);
