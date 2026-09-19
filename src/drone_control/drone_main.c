@@ -66,8 +66,8 @@ static void print_geometry(void) {
     printf("Fahrgrenze     x +/-%.0f mm, y +/-%.0f mm\n",
            ACE_REACH_LIMIT_X_MM, ACE_REACH_LIMIT_Y_MM);
     printf("Sichtbreite    %.0f mm\n", ACE_VIEW_WIDTH_MM);
-    printf("Startposition  x=%.0f y=%.0f mm\n\n",
-           ACE_START_X_MM, ACE_START_Y_MM);
+    printf("Startposition  x=%.0f y=%.0f mm\n", ACE_START_X_MM, ACE_START_Y_MM);
+    printf("Bahnaufloesung %.0f mm je Teilstueck\n\n", ACE_SEGMENT_MM);
 }
 
 int main(int argc, char **argv) {

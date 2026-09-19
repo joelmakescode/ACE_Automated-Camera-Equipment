@@ -31,6 +31,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/drone_control/navigator.c
         src/drone_control/calibrate.c
         src/drone_control/kinematics.c
+        src/drone_control/path.c
         src/drone_control/motion.c
         src/drone_control/stepper.c
         src/tracking/ball_detector.cpp

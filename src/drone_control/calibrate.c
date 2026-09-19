@@ -5,6 +5,7 @@
 #include "geometry.h"
 #include "kinematics.h"
 #include "motion.h"
+#include "path.h"
 #include "pins.h"
 
 #include <math.h>
@@ -16,7 +17,7 @@ static void read_motors(long steps[ACE_MOTOR_COUNT]) {
 }
 
 static int drain_until_idle(BallDetector *detector, const HsvRange *range) {
-    while (motion_busy()) {
+    while (path_busy()) {
         DetectionResult ignored;
         if (bd_detect(detector, range, &ignored) != 0) return -1;
     }
@@ -25,13 +26,7 @@ static int drain_until_idle(BallDetector *detector, const HsvRange *range) {
 
 static int move_to(BallDetector *detector, const HsvRange *range,
                    double x_mm, double y_mm, unsigned int step_delay_us) {
-    long motors[ACE_MOTOR_COUNT];
-    long steps[ACE_MOTOR_COUNT];
-
-    read_motors(motors);
-    kin_plan(motors, x_mm, y_mm, steps);
-
-    if (motion_start(steps, step_delay_us) != 0) return -1;
+    if (path_start(x_mm, y_mm, step_delay_us) != 0) return -1;
     return drain_until_idle(detector, range);
 }
 

@@ -24,6 +24,9 @@ void motion_abort(void);
 int  motion_thread_start(void);
 void motion_thread_stop(void);
 
+typedef void (*MotionIdleHook)(void);
+void motion_set_idle_hook(MotionIdleHook hook);
+
 bool motion_busy(void);
 long motion_position(int motor);
 

@@ -106,6 +106,10 @@
 #define ACE_TENSION_MM 1.0
 #endif
 
+#ifndef ACE_SEGMENT_MM
+#define ACE_SEGMENT_MM 5.0
+#endif
+
 #ifndef ACE_TRAVEL_DELAY_US
 #define ACE_TRAVEL_DELAY_US 2500u
 #endif

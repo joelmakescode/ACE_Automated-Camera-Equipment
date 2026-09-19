@@ -5,6 +5,7 @@
 #include "geometry.h"
 #include "kinematics.h"
 #include "motion.h"
+#include "path.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -51,12 +52,8 @@ static double clamp_abs(double value, double limit) {
     return value;
 }
 
-static int start_move(const long motor_steps[ACE_MOTOR_COUNT],
-                      double x_mm, double y_mm) {
-    long steps[ACE_MOTOR_COUNT];
-
-    kin_plan(motor_steps, x_mm, y_mm, steps);
-    return motion_start(steps, g_step_delay_us);
+static int start_move(double x_mm, double y_mm) {
+    return path_start(x_mm, y_mm, g_step_delay_us);
 }
 
 int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
@@ -69,6 +66,8 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     g_state        = NAV_PATROL;
     g_patrol_index = 0;
     g_ever_seen    = 0;
+
+    path_abort();
 
     long motor_steps[ACE_MOTOR_COUNT];
     read_motors(motor_steps);
@@ -86,16 +85,16 @@ static void follow_object(const DetectionResult *result,
     int centered = fabs(error_x) <= ACE_CENTER_TOLERANCE_PX &&
                    fabs(error_y) <= ACE_CENTER_TOLERANCE_PX;
 
-    if (g_state == NAV_PATROL) motion_abort();
+    if (g_state == NAV_PATROL) path_abort();
 
     if (centered) {
-        motion_abort();
+        path_abort();
         g_state = NAV_HOVER;
         return;
     }
 
     g_state = NAV_APPROACH;
-    if (motion_busy()) return;
+    if (path_busy()) return;
 
     double mm_per_pixel = ACE_VIEW_WIDTH_MM / (double)g_frame_width;
     double shift_x = clamp_abs(error_x * mm_per_pixel * ACE_CORRECTION_GAIN
@@ -105,14 +104,13 @@ static void follow_object(const DetectionResult *result,
 
     double x_mm, y_mm;
     kin_position(motor_steps, &x_mm, &y_mm);
-    start_move(motor_steps, x_mm + shift_x, y_mm + shift_y);
+    start_move(x_mm + shift_x, y_mm + shift_y);
 }
 
-static void continue_patrol(const long motor_steps[ACE_MOTOR_COUNT]) {
-    if (motion_busy()) return;
+static void continue_patrol(void) {
+    if (path_busy()) return;
 
-    start_move(motor_steps, PATROL_PATH[g_patrol_index][0],
-               PATROL_PATH[g_patrol_index][1]);
+    start_move(PATROL_PATH[g_patrol_index][0], PATROL_PATH[g_patrol_index][1]);
     g_patrol_index = (g_patrol_index + 1) % PATROL_POINTS;
 }
 
@@ -133,7 +131,7 @@ void nav_update(const DetectionResult *result) {
         g_patrol_index = 0;
     }
 
-    continue_patrol(motor_steps);
+    continue_patrol();
 }
 
 NavState nav_state(void) {

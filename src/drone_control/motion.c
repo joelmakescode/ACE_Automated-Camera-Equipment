@@ -4,6 +4,7 @@
 #include "stepper.h"
 
 #include <pthread.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -25,6 +26,8 @@ static int             g_running = 0;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t       g_worker;
 static volatile int    g_worker_active = 0;
+
+static MotionIdleHook volatile g_idle_hook = NULL;
 
 static void deadline_add_us(struct timespec *ts, unsigned int us) {
     ts->tv_nsec += (long)us * 1000L;
@@ -214,11 +217,19 @@ static void *worker_main(void *arg) {
         if (motion_busy()) {
             motion_tick();
             motion_wait_next();
-        } else {
-            sleep_ms(2);
+            continue;
         }
+
+        MotionIdleHook hook = g_idle_hook;
+        if (hook) hook();
+
+        if (!motion_busy()) sleep_ms(2);
     }
     return NULL;
+}
+
+void motion_set_idle_hook(MotionIdleHook hook) {
+    g_idle_hook = hook;
 }
 
 int motion_thread_start(void) {

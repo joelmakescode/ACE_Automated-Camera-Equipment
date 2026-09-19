@@ -10,25 +10,21 @@ static double anchor_y(int motor) {
     return ACE_MOTOR_CORNER[motor][1] * ACE_ANCHOR_SPAN_Y_MM / 2.0;
 }
 
-static void find_opposite_pairs(int *x_neg, int *x_pos, int *y_neg, int *y_pos) {
-    *x_neg = *x_pos = *y_neg = *y_pos = -1;
+static int find_axis_pairs(int axis, int pairs[][2]) {
+    int other = 1 - axis;
+    int count = 0;
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         for (int j = 0; j < ACE_MOTOR_COUNT; j++) {
-            if (*x_neg < 0 &&
-                ACE_MOTOR_CORNER[i][1] == ACE_MOTOR_CORNER[j][1] &&
-                ACE_MOTOR_CORNER[i][0] < 0 && ACE_MOTOR_CORNER[j][0] > 0) {
-                *x_neg = i;
-                *x_pos = j;
-            }
-            if (*y_neg < 0 &&
-                ACE_MOTOR_CORNER[i][0] == ACE_MOTOR_CORNER[j][0] &&
-                ACE_MOTOR_CORNER[i][1] < 0 && ACE_MOTOR_CORNER[j][1] > 0) {
-                *y_neg = i;
-                *y_pos = j;
+            if (ACE_MOTOR_CORNER[i][other] == ACE_MOTOR_CORNER[j][other] &&
+                ACE_MOTOR_CORNER[i][axis] < 0 && ACE_MOTOR_CORNER[j][axis] > 0) {
+                pairs[count][0] = i;
+                pairs[count][1] = j;
+                if (++count >= ACE_MOTOR_COUNT) return count;
             }
         }
     }
+    return count;
 }
 
 static double g_reference_length[ACE_MOTOR_COUNT];
@@ -54,21 +50,25 @@ static double current_length(int motor, const long motor_steps[ACE_MOTOR_COUNT])
     return g_reference_length[motor] - (double)wound * ACE_MM_PER_HALFSTEP;
 }
 
+static double axis_position(int axis, double span,
+                            const long motor_steps[ACE_MOTOR_COUNT]) {
+    int pairs[ACE_MOTOR_COUNT][2];
+    int count = find_axis_pairs(axis, pairs);
+    if (count == 0) return 0.0;
+
+    double sum = 0.0;
+    for (int p = 0; p < count; p++) {
+        double a = current_length(pairs[p][0], motor_steps);
+        double b = current_length(pairs[p][1], motor_steps);
+        sum += (a * a - b * b) / (2.0 * span);
+    }
+    return sum / (double)count;
+}
+
 void kin_position(const long motor_steps[ACE_MOTOR_COUNT],
                   double *x_mm, double *y_mm) {
-    int x_neg, x_pos, y_neg, y_pos;
-    find_opposite_pairs(&x_neg, &x_pos, &y_neg, &y_pos);
-
-    if (x_mm) {
-        double a = current_length(x_neg, motor_steps);
-        double b = current_length(x_pos, motor_steps);
-        *x_mm = (a * a - b * b) / (2.0 * ACE_ANCHOR_SPAN_X_MM);
-    }
-    if (y_mm) {
-        double a = current_length(y_neg, motor_steps);
-        double b = current_length(y_pos, motor_steps);
-        *y_mm = (a * a - b * b) / (2.0 * ACE_ANCHOR_SPAN_Y_MM);
-    }
+    if (x_mm) *x_mm = axis_position(0, ACE_ANCHOR_SPAN_X_MM, motor_steps);
+    if (y_mm) *y_mm = axis_position(1, ACE_ANCHOR_SPAN_Y_MM, motor_steps);
 }
 
 void kin_clamp(double *x_mm, double *y_mm) {
