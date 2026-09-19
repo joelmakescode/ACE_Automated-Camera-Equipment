@@ -108,7 +108,11 @@ void figure_pose(double x_mm, double y_mm, FigurePose *out) {
     }
 }
 
-/* Sollaenge eines Seils am Wegpunkt, mit denselben Zuschlaegen wie kin_plan. */
+/* Sollaenge eines Seils am Wegpunkt, mit denselben Zuschlaegen wie kin_plan.
+ * Die Nennhoehe genuegt hier: in dieser Trockenrechnung startet die
+ * Plattform auf Nennhoehe, und da jeder Wegpunkt raeumlich widerspruchsfrei
+ * ist, bleibt sie dort. Die Hoehe, die kin_plan an der echten Anlage
+ * mitfuehrt, waere an jedem Wegpunkt dieselbe. */
 static double planned_length(int motor, double x_mm, double y_mm) {
     double from_centre = sqrt(x_mm * x_mm + y_mm * y_mm);
     double slack       = ACE_SLACK_PER_100MM * from_centre / 100.0;
@@ -185,6 +189,39 @@ void figure_simulate(double from_x_mm, double from_y_mm,
     kin_position_from_lengths(have, &end_x, &end_y);
     out->end_error_mm = sqrt((end_x - to_x_mm) * (end_x - to_x_mm)
                            + (end_y - to_y_mm) * (end_y - to_y_mm));
+}
+
+double figure_margin_without(int skip_motor, double x_mm, double y_mm) {
+    double tx[3], ty[3];
+    int    n = 0;
+
+    for (int i = 0; i < ACE_MOTOR_COUNT && n < 3; i++) {
+        if (i == skip_motor) continue;
+        kin_anchor(i, &tx[n], &ty[n]);
+        n++;
+    }
+    if (n < 3) return 0.0;
+
+    /* Umlaufsinn bestimmen, damit "innen" unabhaengig von der Reihenfolge
+     * der Anker dasselbe Vorzeichen bekommt. */
+    double area2 = (tx[1] - tx[0]) * (ty[2] - ty[0])
+                 - (ty[1] - ty[0]) * (tx[2] - tx[0]);
+    double turn  = (area2 >= 0.0) ? 1.0 : -1.0;
+
+    double best = 0.0;
+    int    have = 0;
+
+    for (int e = 0; e < 3; e++) {
+        int    f   = (e + 1) % 3;
+        double ex  = tx[f] - tx[e];
+        double ey  = ty[f] - ty[e];
+        double len = sqrt(ex * ex + ey * ey);
+        if (len < 1e-9) continue;
+
+        double d = turn * (ex * (y_mm - ty[e]) - ey * (x_mm - tx[e])) / len;
+        if (!have || d < best) { best = d; have = 1; }
+    }
+    return best;
 }
 
 double figure_winch_force_n(int motor) {

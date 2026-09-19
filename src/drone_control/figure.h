@@ -63,6 +63,16 @@ void figure_simulate(double from_x_mm, double from_y_mm,
  * ACE_MOTOR_TORQUE_NMM aufbringen kann, in Newton. */
 double figure_winch_force_n(int motor);
 
+/* Abstand zur Kante des Dreiecks, das die uebrigen drei Anker aufspannen,
+ * in mm; negativ heisst ausserhalb.
+ *
+ * Faellt eine Winde ganz aus, haengt die Plattform an drei Seilen. Positive
+ * Zugkraefte gibt es dann nur noch, solange sie senkrecht ueber diesem
+ * Dreieck steht. Bei der Standardgeometrie laeuft die Kante ohne Winde 1
+ * genau durch die Mitte des Ankerfelds - die Haelfte der Flaeche haengt
+ * also allein an der schwachen Winde. */
+double figure_margin_without(int skip_motor, double x_mm, double y_mm);
+
 #ifdef __cplusplus
 }
 #endif

@@ -84,6 +84,84 @@ Varianten vorher durch und stellt sie gegenüber — bei der Standardgeometrie:
 Während der Fahrt wird derselbe Wert laufend aus den Schrittzählern gebildet und
 gewarnt, sobald er `ACE_MAX_HEIGHT_SPREAD_MM` übersteigt.
 
+### Die Höhe ist keine Konstante
+
+Die Plattform soll sich nicht senkrecht bewegen, aber sie *hängt* — ihre Höhe
+folgt allein aus den vier Seillängen. Bei dieser Geometrie sind **1 mm Seil
+rund 2,8 mm Höhe** (`dL/dz = 0,361`), die Hebelwirkung ist also groß.
+
+Für die Lage in der Fläche ist das folgenlos: in der Paarformel
+`x = (ℓ₃² − ℓ₂²)/(2·span)` kürzt sich z **exakt** heraus, x und y stimmen auf
+jeder Höhe. Für die Planung ist es das nicht. Wird mit der Nennhöhe geplant,
+während die Plattform tiefer hängt, sind die kommandierten Seile ungleich zu
+kurz — jede Fahrt in der Fläche enthält dann heimlich einen Hub, und der fällt
+je Winde verschieden aus.
+
+`kin_plan` führt die Höhe deshalb aus dem laufenden Zählerstand mit und plant
+auf der **gemessenen** statt der unterstellten Höhe:
+
+| Ausgangslage, Fahrt nach (120,120) | feste Nennhöhe | Höhe halten |
+| ---------------------------------- | -------------- | ----------- |
+| Plattform hängt auf 156 statt 150 mm | **+6,01 mm Hub** | −0,006 mm |
+| nach `--tension 1` (Plattform auf 147,2 mm) | **+2,80 mm Hub** | +0,05 mm |
+
+Das xy-Ziel wird in allen Fällen exakt getroffen. Abschalten mit
+`kin_set_hold_height(0)`; Plausibilitätsschranken stehen in `geometry.h`
+(`ACE_HOLD_HEIGHT_MIN_MM`/`MAX`), ab `ACE_HEIGHT_DRIFT_WARN_MM` Abweichung vom
+Nennmaß wird gewarnt.
+
+## Objektverfolgung mit Kamera (`ace_track`)
+
+Hält ein farbiges Objekt in der Bildmitte. Baut auf demselben 3D-Kern auf wie
+`ace_figure` und ergänzt ihn um Kamera und Bildmodell.
+
+```sh
+./ace_track                          # Lernphase, dann verfolgen
+./ace_track --stream=8080            # mit Livebild im Browser
+./ace_track --weak-motor 1 --preload 1.2
+./ace_track --no-learn --gain 0.4    # ohne Einmessen, extra gedämpft
+```
+
+### Kamerawinkel, der sich ändert
+
+Weil oben ein HDMI-Kabel zieht, ist die Zuordnung Bild → Fläche keine feste
+Vorzeichenfrage. Sie wird als **Drehstreckung** modelliert — eine komplexe Zahl
+`a = Maßstab · exp(i·Kamerawinkel)`, also zwei Parameter statt der vier einer
+allgemeinen 2×2-Matrix, und damit deutlich robuster zu schätzen. Der nötige
+Fahrweg ist schlicht `E / a`.
+
+Eine Lernphase mit vier festen Probefahrten bestimmt `a` von Grund auf; danach
+wird jede Fahrt als weitere Messung eingearbeitet, mit Vergessensfaktor, damit
+eine langsame Drehung ankommt. Ausreißer (bewegtes Objekt, rutschende Winde)
+werden abgewiesen.
+
+Der Regelkreis ist stabil, solange der geschätzte Kamerawinkel um weniger als
+`acos(gain/2)` danebenliegt — bei Gain 1,0 sind das 60°, bei den
+voreingestellten 0,6 schon **72,5°**. Klingt der Bildfehler zwei Züge lang
+nicht ab, hat sich die Kamera weiter gedreht als der Regler einfangen kann;
+dann wird das Bildmodell automatisch neu gelernt.
+
+### Winde, die durchrutscht
+
+Vier Seile bei zwei Freiheitsgraden sind einfach redundant: jede Achse wird aus
+zwei unabhängigen Ankerpaaren bestimmt. Nimmt man Winde 1 aus der Wertung,
+bleibt x über Paar (3,2) und y über Paar (3,0) — die Lage ist **weiter
+vollständig bestimmt**.
+
+Das dreht den Defekt um. Statt den Schlupf unsichtbar in die Positionsschätzung
+einzuschleppen, wird er **messbar**: die Länge, die die Lage aus den gesunden
+Winden für Winde 1 fordert, gegen die Länge, die ihr Schrittzähler behauptet.
+Das braucht keine Kamera. Ab `ACE_SLIP_WARN_MM` wird gewarnt, ab
+`ACE_SLIP_RECOVER_MM` wird nur diese eine Winde neu referenziert
+(`kin_reset_motor`), damit die Planung wieder die richtige Seillänge
+kommandiert. Zusätzlich hält eine Vorspannung (`--preload`) ihr Seil straff.
+
+Ein Vorbehalt: fällt Winde 1 ganz aus, tragen drei Seile nur noch über ihrem
+Dreieck. Dessen Kante läuft bei dieser Geometrie **genau durch die Mitte des
+Ankerfelds** — die halbe Fläche hängt also an der schwachen Winde.
+`figure_margin_without` rechnet den Abstand zu dieser Kante aus, `ace_track`
+gibt ihn beim Start aus.
+
 ### Statik
 
 Aus dem Kräftegleichgewicht am Massepunkt folgt, dass die von den vier Seilen

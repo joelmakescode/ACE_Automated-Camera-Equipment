@@ -38,6 +38,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(ace_figure PRIVATE src/drone_control)
     target_link_libraries(ace_figure PRIVATE Threads::Threads m)
 
+    # Objektverfolgung: Figurenfahrt-Kern plus Kamera und Bildmodell.
+    add_executable(ace_track
+        src/drone_control/track_main.c
+        src/drone_control/visual.c
+        src/drone_control/figure.c
+        src/drone_control/kinematics.c
+        src/drone_control/path.c
+        src/drone_control/motion.c
+        src/drone_control/stepper.c
+        src/tracking/ball_detector.cpp
+    )
+    target_include_directories(ace_track PRIVATE
+        src/drone_control
+        src/tracking
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(ace_track PRIVATE ${OpenCV_LIBS} Threads::Threads m)
+
     add_executable(ace_drone
         src/drone_control/drone_main.c
         src/drone_control/navigator.c

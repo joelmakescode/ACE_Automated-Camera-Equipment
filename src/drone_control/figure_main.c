@@ -38,8 +38,11 @@ static long ms_since(const struct timespec *then) {
 typedef struct {
     double worst_spread_mm;
     double min_tension;
+    double min_height_mm;
+    double max_height_mm;
     int    spread_warned;
     int    tension_warned;
+    int    height_warned;
 } RunStats;
 
 /* ---------------------------------------------------------------- Ausgabe */
@@ -284,9 +287,23 @@ static void print_load(const FigurePoint *points, int count, double mass_g) {
 
 /* ------------------------------------------------------------------ Fahrt */
 
-static void track(RunStats *st, double spread, const FigurePose *pose) {
+static void track(RunStats *st, double spread, double height,
+                  const FigurePose *pose) {
     if (spread > st->worst_spread_mm) st->worst_spread_mm = spread;
     if (pose->min_tension < st->min_tension) st->min_tension = pose->min_tension;
+    if (height < st->min_height_mm) st->min_height_mm = height;
+    if (height > st->max_height_mm) st->max_height_mm = height;
+
+    if (!st->height_warned &&
+        fabs(height - ACE_HOVER_HEIGHT_MM) > ACE_HEIGHT_DRIFT_WARN_MM) {
+        st->height_warned = 1;
+        fprintf(stderr,
+                "\nDie Plattform haengt auf %.1f mm statt %.0f mm. Geplant wird "
+                "auf der\ngemessenen Hoehe, die Fahrt bleibt also waagerecht - "
+                "aber die Ursache\nbleibt: Seildehnung, Schlupf oder ein falscher "
+                "Wickeldurchmesser.\n",
+                height, ACE_HOVER_HEIGHT_MM);
+    }
 
     if (!st->spread_warned && spread > ACE_MAX_HEIGHT_SPREAD_MM) {
         st->spread_warned = 1;
@@ -330,11 +347,13 @@ static int drive_leg(double from_x, double from_y, const FigurePoint *to,
 
         /* Laufende 3D-Kontrolle: die vier koppelnavigierten Laengen muessen
          * auch zwischen den Wegpunkten zu einem einzigen Punkt im Raum
-         * passen, sonst ziehen die Winden gegeneinander. */
+         * passen, sonst ziehen die Winden gegeneinander. Dazu die Hoehe
+         * selbst - sie ist keine Konstante, sondern folgt aus den Laengen. */
         double     spread = kin_height_spread(lengths, x, y);
+        double     height = kin_height(lengths, x, y);
         FigurePose pose;
         figure_pose(x, y, &pose);
-        track(st, spread, &pose);
+        track(st, spread, height, &pose);
 
         if (!quiet) {
             long now = ms_since(&t0);
@@ -348,7 +367,8 @@ static int drive_leg(double from_x, double from_y, const FigurePoint *to,
                 if (done > 100.0) done = 100.0;
                 if (done < 0.0)   done = 0.0;
 
-                printf("\r  -> %-13s %+7.1f,%+7.1f mm  Seil", to->label, x, y);
+                printf("\r  -> %-13s %+7.1f,%+7.1f mm  h %5.1f  Seil",
+                       to->label, x, y, height);
                 for (int i = 0; i < ACE_MOTOR_COUNT; i++)
                     printf(" %5.0f", lengths[i]);
                 printf("  dz %5.3f  Zug %4.2f  %3.0f %%   ",
@@ -394,6 +414,10 @@ static void print_result(const RunStats *st) {
     printf("\nErgebnis\n");
     printf("  Endlage laut Schrittzaehlern  x=%+.2f  y=%+.2f mm"
            "   (Soll 0,0, daneben %.2f mm)\n", x, y, sqrt(x * x + y * y));
+    printf("  Hoehe unter den Ankern        %.2f mm"
+           "   (Nennmass %.0f, unterwegs %.1f .. %.1f)\n",
+           kin_height(lengths, x, y), ACE_HOVER_HEIGHT_MM,
+           st->min_height_mm, st->max_height_mm);
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         double diff = lengths[i] - kin_cable_length(i, 0.0, 0.0);
         printf("  Winde %d %-13s %+7.3f mm gegenueber der Mitte"
@@ -551,7 +575,7 @@ int main(int argc, char **argv) {
         printf("Nullpunkt gesetzt: hier ist x=0, y=0.\n\n");
     }
 
-    RunStats st = { 0.0, 1e9, 0, 0 };
+    RunStats st = { 0.0, 1e9, 1e9, -1e9, 0, 0, 0 };
 
     for (int loop = 0; loop < loops && rc == 0 && !g_abort; loop++) {
         if (loops > 1) printf("Durchgang %d von %d\n", loop + 1, loops);

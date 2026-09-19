@@ -29,13 +29,57 @@ static int find_axis_pairs(int axis, int pairs[][2]) {
 
 static double g_reference_length[ACE_MOTOR_COUNT];
 static long   g_reference_steps[ACE_MOTOR_COUNT];
+static double g_runtime_trim[ACE_MOTOR_COUNT];
+static int    g_untrusted      = -1;
+static int    g_hold_height    = 1;
+static double g_planned_height = ACE_HOVER_HEIGHT_MM;
 
-double kin_cable_length(int motor, double x_mm, double y_mm) {
+void kin_set_hold_height(int enabled) {
+    g_hold_height = enabled ? 1 : 0;
+}
+
+int kin_hold_height(void) {
+    return g_hold_height;
+}
+
+double kin_planned_height(void) {
+    return g_planned_height;
+}
+
+void kin_anchor(int motor, double *x_mm, double *y_mm) {
+    if (motor < 0 || motor >= ACE_MOTOR_COUNT) return;
+    if (x_mm) *x_mm = anchor_x(motor);
+    if (y_mm) *y_mm = anchor_y(motor);
+}
+
+void kin_set_untrusted(int motor) {
+    g_untrusted = (motor >= 0 && motor < ACE_MOTOR_COUNT) ? motor : -1;
+}
+
+int kin_untrusted(void) {
+    return g_untrusted;
+}
+
+void kin_set_trim(int motor, double mm) {
+    if (motor < 0 || motor >= ACE_MOTOR_COUNT) return;
+    g_runtime_trim[motor] = mm;
+}
+
+double kin_trim(int motor) {
+    if (motor < 0 || motor >= ACE_MOTOR_COUNT) return 0.0;
+    return g_runtime_trim[motor];
+}
+
+double kin_cable_length_at(int motor, double x_mm, double y_mm, double height_mm) {
     if (motor < 0 || motor >= ACE_MOTOR_COUNT) return 0.0;
 
     double dx = x_mm - anchor_x(motor);
     double dy = y_mm - anchor_y(motor);
-    return sqrt(dx * dx + dy * dy + ACE_HOVER_HEIGHT_MM * ACE_HOVER_HEIGHT_MM);
+    return sqrt(dx * dx + dy * dy + height_mm * height_mm);
+}
+
+double kin_cable_length(int motor, double x_mm, double y_mm) {
+    return kin_cable_length_at(motor, x_mm, y_mm, ACE_HOVER_HEIGHT_MM);
 }
 
 void kin_reset(double x_mm, double y_mm, const long motor_steps[ACE_MOTOR_COUNT]) {
@@ -66,13 +110,30 @@ static double axis_from_lengths(int axis, double span,
     int count = find_axis_pairs(axis, pairs);
     if (count == 0) return 0.0;
 
-    double sum = 0.0;
+    double sum  = 0.0;
+    int    used = 0;
+
     for (int p = 0; p < count; p++) {
+        if (g_untrusted >= 0 &&
+            (pairs[p][0] == g_untrusted || pairs[p][1] == g_untrusted)) continue;
+
         double a = lengths[pairs[p][0]];
         double b = lengths[pairs[p][1]];
         sum += (a * a - b * b) / (2.0 * span);
+        used++;
     }
-    return sum / (double)count;
+
+    /* Bliebe kein Paar uebrig, waere die Achse unbestimmt. Dann lieber alle
+     * nehmen als eine Null zu melden, die wie eine Messung aussieht. */
+    if (used == 0) {
+        for (int p = 0; p < count; p++) {
+            double a = lengths[pairs[p][0]];
+            double b = lengths[pairs[p][1]];
+            sum += (a * a - b * b) / (2.0 * span);
+        }
+        used = count;
+    }
+    return sum / (double)used;
 }
 
 void kin_position_from_lengths(const double lengths[ACE_MOTOR_COUNT],
@@ -98,6 +159,37 @@ double kin_implied_height(int motor, double x_mm, double y_mm, double length_mm)
     return (rest > 0.0) ? sqrt(rest) : 0.0;
 }
 
+double kin_height(const double lengths[ACE_MOTOR_COUNT],
+                  double x_mm, double y_mm) {
+    double sum = 0.0;
+    int    n   = 0;
+
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
+        if (i == g_untrusted) continue;
+
+        double z = kin_implied_height(i, x_mm, y_mm, lengths[i]);
+        if (z > 0.0) { sum += z; n++; }        /* 0 heisst: Seil zu kurz     */
+    }
+
+    /* Bleibt nichts Brauchbares uebrig, ist die Nennhoehe die ehrlichste
+     * Antwort - eine gemittelte Null waere eine erfundene Messung. */
+    if (n == 0) return ACE_HOVER_HEIGHT_MM;
+    return sum / (double)n;
+}
+
+void kin_pose(const long motor_steps[ACE_MOTOR_COUNT],
+              double *x_mm, double *y_mm, double *height_mm) {
+    double lengths[ACE_MOTOR_COUNT];
+    double x, y;
+
+    kin_lengths(motor_steps, lengths);
+    kin_position_from_lengths(lengths, &x, &y);
+
+    if (x_mm)      *x_mm      = x;
+    if (y_mm)      *y_mm      = y;
+    if (height_mm) *height_mm = kin_height(lengths, x, y);
+}
+
 double kin_height_spread(const double lengths[ACE_MOTOR_COUNT],
                          double x_mm, double y_mm) {
     double lo = 0.0, hi = 0.0;
@@ -108,6 +200,26 @@ double kin_height_spread(const double lengths[ACE_MOTOR_COUNT],
         if (i == 0 || z > hi) hi = z;
     }
     return hi - lo;
+}
+
+double kin_length_residual(int motor, const long motor_steps[ACE_MOTOR_COUNT]) {
+    if (motor < 0 || motor >= ACE_MOTOR_COUNT) return 0.0;
+
+    double lengths[ACE_MOTOR_COUNT];
+    double x, y;
+
+    kin_lengths(motor_steps, lengths);
+    kin_position_from_lengths(lengths, &x, &y);
+
+    return lengths[motor] - kin_cable_length(motor, x, y);
+}
+
+void kin_reset_motor(int motor, double x_mm, double y_mm,
+                     const long motor_steps[ACE_MOTOR_COUNT]) {
+    if (motor < 0 || motor >= ACE_MOTOR_COUNT) return;
+
+    g_reference_length[motor] = kin_cable_length(motor, x_mm, y_mm);
+    g_reference_steps[motor]  = motor_steps ? motor_steps[motor] : 0;
 }
 
 void kin_clamp(double *x_mm, double *y_mm) {
@@ -126,13 +238,35 @@ void kin_plan(const long motor_steps[ACE_MOTOR_COUNT],
               long steps[ACE_MOTOR_COUNT]) {
     kin_clamp(&target_x_mm, &target_y_mm);
 
+    /* Auf welcher Hoehe haengt die Plattform gerade? Mit der wird geplant,
+     * nicht mit der Nennhoehe. Sonst enthaelt jede Fahrt in der Flaeche
+     * heimlich einen Hub, und der faellt je Winde verschieden aus. */
+    double height = ACE_HOVER_HEIGHT_MM;
+
+    if (g_hold_height) {
+        double lengths[ACE_MOTOR_COUNT];
+        double x, y;
+
+        kin_lengths(motor_steps, lengths);
+        kin_position_from_lengths(lengths, &x, &y);
+
+        double h = kin_height(lengths, x, y);
+
+        /* Nur uebernehmen, wenn sie plausibel ist. Ein voellig verrutschter
+         * Zaehlerstand darf die Planung nicht mitreissen. */
+        if (h >= ACE_HOLD_HEIGHT_MIN_MM && h <= ACE_HOLD_HEIGHT_MAX_MM) {
+            height = h;
+        }
+    }
+    g_planned_height = height;
+
     double from_centre = sqrt(target_x_mm * target_x_mm + target_y_mm * target_y_mm);
     double slack = ACE_SLACK_PER_100MM * from_centre / 100.0;
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         double now    = current_length(i, motor_steps);
-        double wanted = kin_cable_length(i, target_x_mm, target_y_mm)
-                      + slack + ACE_MOTOR_TRIM_MM[i];
+        double wanted = kin_cable_length_at(i, target_x_mm, target_y_mm, height)
+                      + slack + ACE_MOTOR_TRIM_MM[i] + g_runtime_trim[i];
         steps[i] = lround((now - wanted) / ACE_MM_PER_HALFSTEP_AT(i));
     }
 }

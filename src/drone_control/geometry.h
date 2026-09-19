@@ -191,4 +191,112 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_GRAVITY_MM_S2 9810.0
 #endif
 
+/* ---- Verfolgung mit Kamera (ace_track) -------------------------------- */
+
+/* Als zentriert gilt das Objekt innerhalb dieses Radius um die Bildmitte. */
+#ifndef ACE_TRACK_TOLERANCE_PX
+#define ACE_TRACK_TOLERANCE_PX 18.0
+#endif
+
+/* Daempfung des Regelkreises. Der Kreis bleibt stabil, solange der
+ * geschaetzte Kamerawinkel um weniger als acos(gain/2) danebenliegt:
+ * bei 1.0 sind das 60 Grad, bei 0.6 schon 72.5 Grad. Da hier ein HDMI-Kabel
+ * an der Kamera zieht, ist die Reserve den langsameren Abbau wert. */
+#ifndef ACE_TRACK_GAIN
+#define ACE_TRACK_GAIN 0.6
+#endif
+
+#ifndef ACE_TRACK_MAX_STEP_MM
+#define ACE_TRACK_MAX_STEP_MM 30.0
+#endif
+
+/* Laenge einer Probefahrt der Lernphase. */
+#ifndef ACE_TRACK_PROBE_MM
+#define ACE_TRACK_PROBE_MM 30.0
+#endif
+
+#ifndef ACE_TRACK_SETTLE_MS
+#define ACE_TRACK_SETTLE_MS 500
+#endif
+
+/* Treffer, ueber die eine Messung der Objektlage gemittelt wird. */
+#ifndef ACE_TRACK_SAMPLES
+#define ACE_TRACK_SAMPLES 5
+#endif
+
+#ifndef ACE_TRACK_SAMPLE_FRAMES
+#define ACE_TRACK_SAMPLE_FRAMES 40
+#endif
+
+/* Zuege ohne nennenswerten Fortschritt, nach denen das Bildmodell neu
+ * gelernt wird - dann hat sich die Kamera weiter gedreht als der Regler
+ * von sich aus wieder einfangen kann. */
+#ifndef ACE_TRACK_STALL_LIMIT
+#define ACE_TRACK_STALL_LIMIT 2
+#endif
+
+/* Weniger als das gilt als kein Fortschritt. */
+#ifndef ACE_TRACK_STALL_RATIO
+#define ACE_TRACK_STALL_RATIO 0.95
+#endif
+
+/* Ausreisserfilter des Bildmodells: Anteil der Vorhersage plus Sockel. */
+#ifndef ACE_VIS_GATE_REL
+#define ACE_VIS_GATE_REL 0.35
+#endif
+
+#ifndef ACE_VIS_GATE_PX
+#define ACE_VIS_GATE_PX 12.0
+#endif
+
+/* Vergessensfaktor. Nach zehn Messungen zaehlt die aelteste noch zu 20 %. */
+#ifndef ACE_VIS_LAMBDA
+#define ACE_VIS_LAMBDA 0.85
+#endif
+
+/* ---- Winde, die Schritte verliert ------------------------------------- */
+
+/* Diese Winde wird aus der Positionsschaetzung genommen. Die Lage bleibt
+ * ueber die uebrigen drei vollstaendig bestimmt, und der Schlupf dieser
+ * Winde wird dadurch messbar statt unsichtbar. -1 schaltet es ab. */
+#ifndef ACE_WEAK_MOTOR
+#define ACE_WEAK_MOTOR 1
+#endif
+
+/* Vorspannung auf der schwachen Winde: ihr Seil wird um diesen Betrag
+ * kuerzer kommandiert, damit es trotz Schlupf straff bleibt. */
+#ifndef ACE_WEAK_PRELOAD_MM
+#define ACE_WEAK_PRELOAD_MM 0.8
+#endif
+
+/* Ab diesem gemessenen Schlupf wird gewarnt. */
+#ifndef ACE_SLIP_WARN_MM
+#define ACE_SLIP_WARN_MM 0.6
+#endif
+
+/* Ab diesem Schlupf wird die Winde neu referenziert, damit die Planung
+ * wieder die richtige Seillaenge kommandiert. */
+#ifndef ACE_SLIP_RECOVER_MM
+#define ACE_SLIP_RECOVER_MM 1.5
+#endif
+
+/* ---- Hoehe halten ------------------------------------------------------
+ *
+ * Die Plattform haengt; ihre Hoehe folgt aus den Seillaengen und ist kein
+ * fester Wert. Bei dieser Geometrie sind 1 mm Seil rund 2,8 mm Hoehe.
+ * kin_plan fuehrt die Hoehe darum aus dem Zaehlerstand mit. Faellt sie aus
+ * diesen Schranken, wird sie verworfen und mit der Nennhoehe geplant. */
+#ifndef ACE_HOLD_HEIGHT_MIN_MM
+#define ACE_HOLD_HEIGHT_MIN_MM (0.4 * ACE_HOVER_HEIGHT_MM)
+#endif
+
+#ifndef ACE_HOLD_HEIGHT_MAX_MM
+#define ACE_HOLD_HEIGHT_MAX_MM (2.5 * ACE_HOVER_HEIGHT_MM)
+#endif
+
+/* Abweichung von der Nennhoehe, ab der gewarnt wird. */
+#ifndef ACE_HEIGHT_DRIFT_WARN_MM
+#define ACE_HEIGHT_DRIFT_WARN_MM 8.0
+#endif
+
 #endif
