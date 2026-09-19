@@ -13,6 +13,7 @@ void path_abort(void);
 bool path_busy(void);
 
 void path_target(double *x_mm, double *y_mm);
+bool path_clamped(void);
 
 #ifdef __cplusplus
 }

@@ -44,6 +44,7 @@ static int    g_worse_x = 0;
 static int    g_worse_y = 0;
 static int    g_wrong_x = 0;
 static int    g_wrong_y = 0;
+static int    g_ever_hovered = 0;
 static int    g_warned_clip = 0;
 
 typedef struct {
@@ -127,6 +128,7 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     g_ever_seen    = 0;
     g_wrong_x      = 0;
     g_wrong_y      = 0;
+    g_ever_hovered = 0;
     g_warned_clip  = 0;
     g_fit_reported = 0;
     fit_reset(&g_fit_x);
@@ -165,7 +167,7 @@ static void report_wrong_way(const char *axis, int strikes,
 }
 
 static void check_direction(double error_x, double error_y, int clipped) {
-    if (!g_have_last_cmd || clipped) return;
+    if (!g_have_last_cmd || clipped || g_ever_hovered) return;
 
     g_worse_x = (fabs(error_x) > fabs(g_cmd_err_x) + 3.0) ? g_worse_x + 1 : 0;
     g_worse_y = (fabs(error_y) > fabs(g_cmd_err_y) + 3.0) ? g_worse_y + 1 : 0;
@@ -204,6 +206,7 @@ static void follow_object(const DetectionResult *result,
         if (g_state != NAV_HOVER) {
             path_abort();
             g_state = NAV_HOVER;
+            g_ever_hovered = 1;
             forget_last_command();
         }
         return;
@@ -270,7 +273,13 @@ void nav_update(const DetectionResult *result) {
     }
 
     if (g_state != NAV_PATROL && g_ever_seen) {
-        if (ms_since(&g_last_seen) < ACE_LOST_GRACE_MS) return;
+        if (ms_since(&g_last_seen) < ACE_LOST_GRACE_MS) {
+            if (path_busy()) {
+                path_abort();
+                forget_last_command();
+            }
+            return;
+        }
         g_state        = NAV_PATROL;
         g_patrol_index = 0;
         forget_last_command();

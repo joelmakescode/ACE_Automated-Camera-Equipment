@@ -295,7 +295,8 @@ int main(int argc, char **argv) {
             }
             printf("  pos=%+6.1f,%+6.1f  soll=%+6.1f,%+6.1f  zug=%+5.1f,%+5.1f mm%s\n",
                    x_mm, y_mm, to_x, to_y, shift_x, shift_y,
-                   path_busy() ? "  faehrt" : "");
+                   path_busy() ? (path_clamped() ? "  faehrt GRENZE" : "  faehrt")
+                               : (path_clamped() ? "  GRENZE" : ""));
             fflush(stdout);
         }
 

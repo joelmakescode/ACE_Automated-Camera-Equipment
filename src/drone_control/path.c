@@ -19,6 +19,7 @@ static int          g_segments = 0;
 static int          g_started  = 0;
 static unsigned int g_step_delay_us = ACE_TRAVEL_DELAY_US;
 static int          g_active = 0;
+static int          g_clamped = 0;
 
 static void read_motors(long steps[ACE_MOTOR_COUNT]) {
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) steps[i] = motion_position(i);
@@ -74,6 +75,7 @@ int path_start(double target_x_mm, double target_y_mm,
     g_to_x = target_x_mm;
     g_to_y = target_y_mm;
     kin_clamp(&g_to_x, &g_to_y);
+    g_clamped = (g_to_x != target_x_mm) || (g_to_y != target_y_mm);
 
     double dx   = g_to_x - g_from_x;
     double dy   = g_to_y - g_from_y;
@@ -106,6 +108,13 @@ bool path_busy(void) {
     pthread_mutex_unlock(&g_lock);
 
     return pending || motion_busy();
+}
+
+bool path_clamped(void) {
+    pthread_mutex_lock(&g_lock);
+    int c = g_clamped;
+    pthread_mutex_unlock(&g_lock);
+    return c != 0;
 }
 
 void path_target(double *x_mm, double *y_mm) {
