@@ -22,7 +22,7 @@ static void on_signal(int sig) {
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
-        "Verwendung: %s [--pattern single|all|sync|ratio|square|drum]\n"
+        "Verwendung: %s [--pattern single|all|sync|ratio|square|tension|drum]\n"
         "               [--motor 0..%d] [--steps N | --revs N] [--dir cw|ccw]\n"
         "               [--delay-us N] [--hold] [--dry-run]\n"
         "\n"
@@ -32,6 +32,8 @@ static void print_usage(const char *prog) {
         "  sync     alle vier gleichzeitig, gleiche Schrittzahl\n"
         "  ratio    alle vier gleichzeitig, ungleiche Schrittzahl\n"
         "  square   vier Kanten, je zwei Seile auf und zwei ab\n"
+        "  tension  alle vier Seile gleich weit fahren, ohne Rueckfahrt:\n"
+        "           --mm -2 nimmt Spannung raus, --mm 2 zieht an\n"
         "  drum     ein Seil um --revs Umdrehungen abwickeln, zum Ausmessen\n"
         "           des tatsaechlichen Wickeldurchmessers mit dem Lineal\n"
         "\n"
@@ -129,6 +131,14 @@ static int pattern_ratio(long steps[ACE_MOTOR_COUNT], long count, unsigned int d
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) steps[i] = -steps[i];
     return run_move("ungleich zurueck", steps, delay_us);
+}
+
+static int pattern_tension(long steps[ACE_MOTOR_COUNT], long count, int dir,
+                           unsigned int delay_us) {
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) steps[i] = dir * count;
+
+    return run_move(dir > 0 ? "alle vier aufwickeln" : "alle vier abwickeln",
+                    steps, delay_us);
 }
 
 static int pattern_drum(long steps[ACE_MOTOR_COUNT], int motor, long count,
@@ -247,6 +257,8 @@ int main(int argc, char **argv) {
         rc = pattern_sync(steps, count, delay_us);
     } else if (strcmp(pattern, "ratio") == 0) {
         rc = pattern_ratio(steps, count, delay_us);
+    } else if (strcmp(pattern, "tension") == 0) {
+        rc = pattern_tension(steps, count, dir, delay_us);
     } else if (strcmp(pattern, "drum") == 0) {
         rc = pattern_drum(steps, motor, count, dir, delay_us);
     } else if (strcmp(pattern, "square") == 0) {
