@@ -45,6 +45,10 @@ static void print_usage(const char *prog) {
         "  --object-mm Durchmesser des Kalibrierobjekts in mm (rundes farbiges\n"
         "              Ding, kein Ball noetig). Ohne diese Angabe kann nur die\n"
         "              Sichtbreite bestimmt werden, nicht der Wickeldurchmesser\n"
+        "  --image-to-field X,Y  Fahrtrichtung je Bildachse, je +1 oder -1.\n"
+        "              Faehrt die Plattform beim Erkennen vom Objekt weg, ist ein\n"
+        "              Vorzeichen falsch. Hier ohne Neubau probieren, dann den\n"
+        "              gefundenen Wert nach geometry.h uebernehmen.\n"
         "  --delay-us  Zeit pro Halbschritt, Standard %u us (Minimum %u us)\n"
         "  --dry-run   Motorphasen nur ausgeben, GPIO nicht anfassen\n"
         "  --quiet     keine Statuszeile pro Frame\n"
@@ -110,6 +114,8 @@ int main(int argc, char **argv) {
     int          mode_goto   = 0;
     double       goto_x      = 0.0;
     double       goto_y      = 0.0;
+    double       img_x       = ACE_IMAGE_TO_FIELD_X;
+    double       img_y       = ACE_IMAGE_TO_FIELD_Y;
 
     HsvRange range = bd_default_hsv_range();
 
@@ -127,6 +133,7 @@ int main(int argc, char **argv) {
         {"calib-mm",  required_argument, 0, 'D'},
         {"object-mm", required_argument, 0, 'O'},
         {"goto",      required_argument, 0, 'g'},
+        {"image-to-field", required_argument, 0, 'F'},
         {"h-min",    required_argument, 0, 1},
         {"h-max",    required_argument, 0, 2},
         {"s-min",    required_argument, 0, 3},
@@ -138,7 +145,7 @@ int main(int argc, char **argv) {
     };
 
     int opt, opt_index = 0;
-    while ((opt = getopt_long(argc, argv, "d:w:h:t::u:nqcCa:D:O:g:", long_opts, &opt_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:w:h:t::u:nqcCa:D:O:g:F:", long_opts, &opt_index)) != -1) {
         switch (opt) {
             case 'd': device   = optarg; break;
             case 'w': width    = atoi(optarg); break;
@@ -150,6 +157,13 @@ int main(int argc, char **argv) {
             case 'C': mode_center = 1; break;
             case 'D': calib_mm    = atof(optarg); break;
             case 'O': object_mm   = atof(optarg); break;
+            case 'F':
+                if (sscanf(optarg, "%lf,%lf", &img_x, &img_y) != 2) {
+                    fprintf(stderr, "--image-to-field erwartet X,Y aus +1 oder -1, "
+                                    "z.B. --image-to-field -1,1\n");
+                    return 1;
+                }
+                break;
             case 'g':
                 if (sscanf(optarg, "%lf,%lf", &goto_x, &goto_y) != 2) {
                     fprintf(stderr, "--goto erwartet X,Y in mm, z.B. --goto 50,0\n");
@@ -231,6 +245,11 @@ int main(int argc, char **argv) {
         bd_release(detector);
         return 1;
     }
+
+    nav_set_image_to_field(img_x, img_y);
+    printf("Bildachsen     x %+.0f, y %+.0f%s\n\n", img_x, img_y,
+           (img_x != ACE_IMAGE_TO_FIELD_X || img_y != ACE_IMAGE_TO_FIELD_Y)
+               ? "  (ueber --image-to-field gesetzt)" : "");
 
     if (stream_on) {
         if (bd_stream_start(stream_port) != 0) {

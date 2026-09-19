@@ -46,6 +46,8 @@ static int    g_warned_x = 0;
 static int    g_warned_y = 0;
 static double g_shift_x = 0.0;
 static double g_shift_y = 0.0;
+static double g_img_x = ACE_IMAGE_TO_FIELD_X;
+static double g_img_y = ACE_IMAGE_TO_FIELD_Y;
 
 static void forget_last_command(void) {
     g_have_last_cmd = 0;
@@ -108,18 +110,20 @@ static void check_direction(double error_x, double error_y) {
         fprintf(stderr,
                 "\nDie Abweichung in x waechst seit %d Korrekturen (%.0f -> %.0f px).\n"
                 "Die Plattform faehrt vom Objekt weg. ACE_IMAGE_TO_FIELD_X in\n"
-                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n\n",
+                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n"
+                "Sofort probieren: --image-to-field %+.0f,%+.0f\n\n",
                 g_worse_x, fabs(g_cmd_err_x), fabs(error_x),
-                (double)ACE_IMAGE_TO_FIELD_X, -(double)ACE_IMAGE_TO_FIELD_X);
+                g_img_x, -g_img_x, -g_img_x, g_img_y);
         g_warned_x = 1;
     }
     if (g_worse_y >= ACE_WRONG_WAY_STRIKES && !g_warned_y) {
         fprintf(stderr,
                 "\nDie Abweichung in y waechst seit %d Korrekturen (%.0f -> %.0f px).\n"
                 "Die Plattform faehrt vom Objekt weg. ACE_IMAGE_TO_FIELD_Y in\n"
-                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n\n",
+                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n"
+                "Sofort probieren: --image-to-field %+.0f,%+.0f\n\n",
                 g_worse_y, fabs(g_cmd_err_y), fabs(error_y),
-                (double)ACE_IMAGE_TO_FIELD_Y, -(double)ACE_IMAGE_TO_FIELD_Y);
+                g_img_y, -g_img_y, g_img_x, -g_img_y);
         g_warned_y = 1;
     }
 }
@@ -154,9 +158,9 @@ static void follow_object(const DetectionResult *result,
 
     double mm_per_pixel = ACE_VIEW_WIDTH_MM / (double)g_frame_width;
     double shift_x = clamp_abs(error_x * mm_per_pixel * ACE_CORRECTION_GAIN
-                               * ACE_IMAGE_TO_FIELD_X, ACE_MAX_CORRECTION_MM);
+                               * g_img_x, ACE_MAX_CORRECTION_MM);
     double shift_y = clamp_abs(error_y * mm_per_pixel * ACE_CORRECTION_GAIN
-                               * ACE_IMAGE_TO_FIELD_Y, ACE_MAX_CORRECTION_MM);
+                               * g_img_y, ACE_MAX_CORRECTION_MM);
 
     double x_mm, y_mm;
     kin_position(motor_steps, &x_mm, &y_mm);
@@ -220,4 +224,14 @@ void nav_target(double *x_mm, double *y_mm) {
 void nav_command(double *shift_x_mm, double *shift_y_mm) {
     if (shift_x_mm) *shift_x_mm = g_shift_x;
     if (shift_y_mm) *shift_y_mm = g_shift_y;
+}
+
+void nav_set_image_to_field(double x, double y) {
+    g_img_x = x;
+    g_img_y = y;
+}
+
+void nav_image_to_field(double *x, double *y) {
+    if (x) *x = g_img_x;
+    if (y) *y = g_img_y;
 }
