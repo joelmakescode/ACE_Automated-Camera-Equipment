@@ -58,7 +58,7 @@ int motion_init(void) {
     }
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
-        g_motors[i] = stepper_create(i, ACE_MOTOR_PINS[i]);
+        g_motors[i] = stepper_create(i, ACE_MOTOR_PINS[i], ACE_MOTOR_DIRECTION[i]);
         if (!g_motors[i]) {
             fprintf(stderr, "motion_init: Motor %d (%s) fehlgeschlagen.\n",
                     i, ACE_MOTOR_NAMES[i]);

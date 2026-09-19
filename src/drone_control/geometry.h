@@ -54,6 +54,10 @@
 #define ACE_REACH_LIMIT_Y_MM 170.0
 #endif
 
+#ifndef ACE_SLACK_PER_100MM
+#define ACE_SLACK_PER_100MM 0.0
+#endif
+
 #ifndef ACE_VIEW_WIDTH_MM
 #define ACE_VIEW_WIDTH_MM 325.0
 #endif

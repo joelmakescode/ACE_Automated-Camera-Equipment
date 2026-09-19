@@ -58,9 +58,12 @@ void kin_plan(const long motor_steps[ACE_MOTOR_COUNT],
               long steps[ACE_MOTOR_COUNT]) {
     kin_clamp(&target_x_mm, &target_y_mm);
 
+    double from_centre = sqrt(target_x_mm * target_x_mm + target_y_mm * target_y_mm);
+    double slack = ACE_SLACK_PER_100MM * from_centre / 100.0;
+
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         double now    = current_length(i, motor_steps);
-        double wanted = kin_cable_length(i, target_x_mm, target_y_mm);
+        double wanted = kin_cable_length(i, target_x_mm, target_y_mm) + slack;
         steps[i] = lround((now - wanted) / ACE_MM_PER_HALFSTEP);
     }
 }

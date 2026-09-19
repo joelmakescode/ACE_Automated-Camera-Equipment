@@ -22,6 +22,7 @@ struct Stepper {
     int  id;
     int  line_fd;
     int  uses_v2_api;
+    int  direction;
     int  phase;
     long position;
 };
@@ -123,7 +124,7 @@ static int write_phase(Stepper *s, unsigned char bits) {
     return ioctl(s->line_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data) < 0 ? -1 : 0;
 }
 
-Stepper *stepper_create(int id, const unsigned int pins[4]) {
+Stepper *stepper_create(int id, const unsigned int pins[4], int direction) {
     if (chip_open() != 0) return NULL;
 
     Stepper *s = calloc(1, sizeof(*s));
@@ -132,10 +133,11 @@ Stepper *stepper_create(int id, const unsigned int pins[4]) {
         return NULL;
     }
 
-    s->id       = id;
-    s->line_fd  = -1;
-    s->phase    = 0;
-    s->position = 0;
+    s->id        = id;
+    s->line_fd   = -1;
+    s->direction = (direction < 0) ? -1 : 1;
+    s->phase     = 0;
+    s->position  = 0;
 
     if (!g_dry_run) {
         if (request_lines_v2(pins, &s->line_fd) == 0) {
@@ -165,7 +167,9 @@ Stepper *stepper_create(int id, const unsigned int pins[4]) {
 int stepper_advance(Stepper *s, int dir) {
     if (!s || dir == 0) return -1;
 
-    s->phase = (s->phase + (dir > 0 ? 1 : 7)) & 7;
+    int turn = (dir > 0 ? 1 : -1) * s->direction;
+
+    s->phase = (s->phase + (turn > 0 ? 1 : 7)) & 7;
     if (write_phase(s, HALFSTEP_PHASES[s->phase]) != 0) return -1;
 
     s->position += (dir > 0 ? 1 : -1);

@@ -11,6 +11,8 @@ static const unsigned int ACE_MOTOR_PINS[ACE_MOTOR_COUNT][4] = {
     { 16, 19, 20, 21 },
 };
 
+static const int ACE_MOTOR_DIRECTION[ACE_MOTOR_COUNT] = { -1, 1, -1, 1 };
+
 static const char *const ACE_MOTOR_NAMES[ACE_MOTOR_COUNT] = {
     "vorne links",
     "vorne rechts",
