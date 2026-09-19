@@ -14,6 +14,7 @@
 #include "kinematics.h"
 #include "motion.h"
 #include "navigator.h"
+#include "path.h"
 #include "pins.h"
 #include "stepper.h"
 
@@ -258,11 +259,23 @@ int main(int argc, char **argv) {
         if (stream_on) bd_stream_push(detector, &result);
 
         if (!quiet) {
-            double x_mm, y_mm;
+            double x_mm, y_mm, to_x, to_y, shift_x, shift_y;
             nav_target(&x_mm, &y_mm);
-            printf("frame=%ld %-9s found=%d px=%.0f,%.0f pos=%.0f,%.0f mm\n",
-                   frame_num, nav_state_name(nav_state()), result.found ? 1 : 0,
-                   result.x, result.y, x_mm, y_mm);
+            path_target(&to_x, &to_y);
+            nav_command(&shift_x, &shift_y);
+
+            printf("frame=%-5ld %-9s found=%d", frame_num,
+                   nav_state_name(nav_state()), result.found ? 1 : 0);
+            if (result.found) {
+                printf(" px=%4.0f,%4.0f err=%+5.0f,%+5.0f",
+                       result.x, result.y,
+                       result.x - width / 2.0, result.y - height / 2.0);
+            } else {
+                printf("                                ");
+            }
+            printf("  pos=%+6.1f,%+6.1f  soll=%+6.1f,%+6.1f  zug=%+5.1f,%+5.1f mm%s\n",
+                   x_mm, y_mm, to_x, to_y, shift_x, shift_y,
+                   path_busy() ? "  faehrt" : "");
             fflush(stdout);
         }
 

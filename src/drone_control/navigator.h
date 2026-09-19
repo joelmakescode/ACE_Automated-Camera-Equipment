@@ -19,6 +19,7 @@ void nav_update(const DetectionResult *result);
 NavState    nav_state(void);
 const char *nav_state_name(NavState state);
 void        nav_target(double *x_mm, double *y_mm);
+void        nav_command(double *shift_x_mm, double *shift_y_mm);
 
 #ifdef __cplusplus
 }

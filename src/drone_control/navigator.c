@@ -44,10 +44,13 @@ static int    g_worse_x = 0;
 static int    g_worse_y = 0;
 static int    g_warned_x = 0;
 static int    g_warned_y = 0;
+static double g_shift_x = 0.0;
+static double g_shift_y = 0.0;
 
 static void forget_last_command(void) {
     g_have_last_cmd = 0;
     g_worse_x = g_worse_y = 0;
+    g_shift_x = g_shift_y = 0.0;
 }
 
 static void read_motors(long steps[ACE_MOTOR_COUNT]) {
@@ -159,6 +162,8 @@ static void follow_object(const DetectionResult *result,
     kin_position(motor_steps, &x_mm, &y_mm);
     start_move(x_mm + shift_x, y_mm + shift_y);
 
+    g_shift_x       = shift_x;
+    g_shift_y       = shift_y;
     g_cmd_err_x     = error_x;
     g_cmd_err_y     = error_y;
     g_have_last_cmd = 1;
@@ -210,4 +215,9 @@ void nav_target(double *x_mm, double *y_mm) {
     long motor_steps[ACE_MOTOR_COUNT];
     read_motors(motor_steps);
     kin_position(motor_steps, x_mm, y_mm);
+}
+
+void nav_command(double *shift_x_mm, double *shift_y_mm) {
+    if (shift_x_mm) *shift_x_mm = g_shift_x;
+    if (shift_y_mm) *shift_y_mm = g_shift_y;
 }
