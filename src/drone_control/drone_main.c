@@ -1,11 +1,15 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <getopt.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <unistd.h>
+
 #include "ball_detector.h"
+#include "calibrate.h"
 #include "geometry.h"
 #include "kinematics.h"
 #include "motion.h"
@@ -25,21 +29,37 @@ static void print_usage(const char *prog) {
         "               [--h-min N] [--h-max N] [--s-min N] [--s-max N]\n"
         "               [--v-min N] [--v-max N] [--stream [port]]\n"
         "               [--delay-us N] [--dry-run] [--quiet]\n"
+        "               [--calibrate | --center] [--at X,Y] [--calib-mm N]\n"
         "\n"
-        "  --delay-us Zeit pro Halbschritt, Standard %u us (Minimum %u us)\n"
-        "  --dry-run  Motorphasen nur ausgeben, GPIO nicht anfassen\n"
-        "  --quiet    keine Statuszeile pro Frame\n",
-        prog, ACE_TRAVEL_DELAY_US, ACE_MIN_STEP_DELAY_US);
+        "  --calibrate faehrt %.0f mm in x und y, misst am Bild die Verschiebung\n"
+        "              des Objekts, kommt in die Mitte zurueck und spannt an\n"
+        "  --center    nur in die Mitte fahren und anspannen, ohne Messung\n"
+        "  --at X,Y    wo die Plattform gerade haengt, Standard 0,0 (Mitte)\n"
+        "  --calib-mm  Kalibrierweg in mm, Standard %.0f\n"
+        "  --delay-us  Zeit pro Halbschritt, Standard %u us (Minimum %u us)\n"
+        "  --dry-run   Motorphasen nur ausgeben, GPIO nicht anfassen\n"
+        "  --quiet     keine Statuszeile pro Frame\n",
+        prog, ACE_CALIBRATION_DISTANCE_MM, ACE_CALIBRATION_DISTANCE_MM,
+        ACE_TRAVEL_DELAY_US, ACE_MIN_STEP_DELAY_US);
 }
 
 static void print_geometry(void) {
-    printf("Ankerquadrat   %.0f x %.0f mm\n",
-           ACE_ANCHOR_SPAN_X_MM, ACE_ANCHOR_SPAN_Y_MM);
-    printf("Schwebehoehe   %.0f mm\n", ACE_HOVER_HEIGHT_MM);
+    double half_diagonal = 0.5 * sqrt(ACE_ANCHOR_SPAN_X_MM * ACE_ANCHOR_SPAN_X_MM
+                                    + ACE_ANCHOR_SPAN_Y_MM * ACE_ANCHOR_SPAN_Y_MM);
+    double cable_angle = atan2(ACE_HOVER_HEIGHT_MM, half_diagonal) * 180.0 / ACE_PI;
+
+    printf("Ankerfeld      %.0f x %.0f mm, Anker %.0f mm ueber der Flaeche\n",
+           ACE_ANCHOR_SPAN_X_MM, ACE_ANCHOR_SPAN_Y_MM, ACE_RIG_HEIGHT_MM);
+    printf("Plattform      %.0f mm unter den Ankern  ->  Kamera %.0f mm ueber der Flaeche\n",
+           ACE_HOVER_HEIGHT_MM, ACE_CAMERA_HEIGHT_MM);
+    printf("Seil in Mitte  %.1f mm lang, %.1f Grad zur Waagerechten\n",
+           kin_cable_length(0, 0.0, 0.0), cable_angle);
     printf("Wickeldurchm.  %.1f mm  ->  %.4f mm pro Halbschritt\n",
            ACE_DRUM_DIAMETER_MM, ACE_MM_PER_HALFSTEP);
     printf("Suchfahrt X    %.0f x %.0f mm\n",
-           ACE_PATROL_SPAN_MM, ACE_PATROL_SPAN_MM);
+           ACE_PATROL_SPAN_X_MM, ACE_PATROL_SPAN_Y_MM);
+    printf("Fahrgrenze     x +/-%.0f mm, y +/-%.0f mm\n",
+           ACE_REACH_LIMIT_X_MM, ACE_REACH_LIMIT_Y_MM);
     printf("Sichtbreite    %.0f mm\n", ACE_VIEW_WIDTH_MM);
     printf("Startposition  x=%.0f y=%.0f mm\n\n",
            ACE_START_X_MM, ACE_START_Y_MM);
@@ -54,6 +74,11 @@ int main(int argc, char **argv) {
     unsigned int delay_us    = ACE_TRAVEL_DELAY_US;
     int          dry_run     = 0;
     int          quiet       = 0;
+    int          mode_cal    = 0;
+    int          mode_center = 0;
+    double       at_x        = 0.0;
+    double       at_y        = 0.0;
+    double       calib_mm    = ACE_CALIBRATION_DISTANCE_MM;
 
     HsvRange range = bd_default_hsv_range();
 
@@ -64,7 +89,11 @@ int main(int argc, char **argv) {
         {"stream",   optional_argument, 0, 't'},
         {"delay-us", required_argument, 0, 'u'},
         {"dry-run",  no_argument,       0, 'n'},
-        {"quiet",    no_argument,       0, 'q'},
+        {"quiet",     no_argument,       0, 'q'},
+        {"calibrate", no_argument,       0, 'c'},
+        {"center",    no_argument,       0, 'C'},
+        {"at",        required_argument, 0, 'a'},
+        {"calib-mm",  required_argument, 0, 'D'},
         {"h-min",    required_argument, 0, 1},
         {"h-max",    required_argument, 0, 2},
         {"s-min",    required_argument, 0, 3},
@@ -76,7 +105,7 @@ int main(int argc, char **argv) {
     };
 
     int opt, opt_index = 0;
-    while ((opt = getopt_long(argc, argv, "d:w:h:t::u:nq", long_opts, &opt_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:w:h:t::u:nqcCa:D:", long_opts, &opt_index)) != -1) {
         switch (opt) {
             case 'd': device   = optarg; break;
             case 'w': width    = atoi(optarg); break;
@@ -84,6 +113,15 @@ int main(int argc, char **argv) {
             case 'u': delay_us = (unsigned int)strtoul(optarg, NULL, 10); break;
             case 'n': dry_run  = 1; break;
             case 'q': quiet    = 1; break;
+            case 'c': mode_cal    = 1; break;
+            case 'C': mode_center = 1; break;
+            case 'D': calib_mm    = atof(optarg); break;
+            case 'a':
+                if (sscanf(optarg, "%lf,%lf", &at_x, &at_y) != 2) {
+                    fprintf(stderr, "--at erwartet X,Y in mm, z.B. --at 80,-40\n");
+                    return 1;
+                }
+                break;
             case 't':
                 stream_on = 1;
                 if (optarg) stream_port = atoi(optarg);
@@ -118,13 +156,30 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (nav_init(width, height, delay_us) != 0) {
+    if (motion_thread_start() != 0) {
         motion_shutdown();
         bd_release(detector);
         return 1;
     }
 
-    if (motion_thread_start() != 0) {
+    if (mode_cal || mode_center) {
+        int cal_rc = mode_cal
+            ? cal_run(detector, &range, width, at_x, at_y, calib_mm, delay_us)
+            : cal_center(detector, &range, at_x, at_y, delay_us);
+
+        if (!g_abort) {
+            printf("Spannung wird gehalten. Beenden mit Ctrl-C.\n");
+            while (!g_abort) pause();
+            printf("\n");
+        }
+
+        motion_release();
+        motion_shutdown();
+        bd_release(detector);
+        return cal_rc == 0 ? 0 : 1;
+    }
+
+    if (nav_init(width, height, delay_us) != 0) {
         motion_shutdown();
         bd_release(detector);
         return 1;

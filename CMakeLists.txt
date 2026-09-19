@@ -24,11 +24,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/drone_control/stepper.c
     )
     target_include_directories(ace_motor_test PRIVATE src/drone_control)
-    target_link_libraries(ace_motor_test PRIVATE Threads::Threads)
+    target_link_libraries(ace_motor_test PRIVATE Threads::Threads m)
 
     add_executable(ace_drone
         src/drone_control/drone_main.c
         src/drone_control/navigator.c
+        src/drone_control/calibrate.c
         src/drone_control/kinematics.c
         src/drone_control/motion.c
         src/drone_control/stepper.c

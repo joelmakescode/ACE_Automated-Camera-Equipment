@@ -44,12 +44,12 @@ void kin_position(const long motor_steps[ACE_MOTOR_COUNT],
 
 void kin_clamp(double *x_mm, double *y_mm) {
     if (x_mm) {
-        if (*x_mm >  ACE_REACH_LIMIT_MM) *x_mm =  ACE_REACH_LIMIT_MM;
-        if (*x_mm < -ACE_REACH_LIMIT_MM) *x_mm = -ACE_REACH_LIMIT_MM;
+        if (*x_mm >  ACE_REACH_LIMIT_X_MM) *x_mm =  ACE_REACH_LIMIT_X_MM;
+        if (*x_mm < -ACE_REACH_LIMIT_X_MM) *x_mm = -ACE_REACH_LIMIT_X_MM;
     }
     if (y_mm) {
-        if (*y_mm >  ACE_REACH_LIMIT_MM) *y_mm =  ACE_REACH_LIMIT_MM;
-        if (*y_mm < -ACE_REACH_LIMIT_MM) *y_mm = -ACE_REACH_LIMIT_MM;
+        if (*y_mm >  ACE_REACH_LIMIT_Y_MM) *y_mm =  ACE_REACH_LIMIT_Y_MM;
+        if (*y_mm < -ACE_REACH_LIMIT_Y_MM) *y_mm = -ACE_REACH_LIMIT_Y_MM;
     }
 }
 

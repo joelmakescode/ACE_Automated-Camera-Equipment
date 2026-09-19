@@ -1,12 +1,14 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <getopt.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include "geometry.h"
 #include "motion.h"
 #include "pins.h"
 #include "stepper.h"
@@ -34,13 +36,15 @@ static void print_usage(const char *prog) {
         "Optionen:\n"
         "  --steps    Halbschritte, Standard %d (= eine Umdrehung)\n"
         "  --revs     Umdrehungen statt Halbschritte\n"
+        "  --mm       Seillaenge in mm statt Halbschritte, Vorzeichen erlaubt\n"
+        "             (positiv = aufwickeln), %.4f mm pro Halbschritt\n"
         "  --dir      cw oder ccw, nur fuer single, Standard cw\n"
         "  --delay-us Zeit pro Halbschritt, Standard %u us (Minimum %u us)\n"
         "  --hold     Spulen am Ende bestromt lassen, bis Ctrl-C\n"
         "  --dry-run  nur Phasenfolge ausgeben, GPIO nicht anfassen\n"
         "\n"
         "Verdrahtung (BCM-Nummern):\n",
-        prog, ACE_MOTOR_COUNT - 1, ACE_HALFSTEPS_PER_REV,
+        prog, ACE_MOTOR_COUNT - 1, ACE_HALFSTEPS_PER_REV, ACE_MM_PER_HALFSTEP,
         ACE_DEFAULT_STEP_DELAY_US, ACE_MIN_STEP_DELAY_US);
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
@@ -159,6 +163,7 @@ int main(int argc, char **argv) {
         {"motor",    required_argument, 0, 'm'},
         {"steps",    required_argument, 0, 's'},
         {"revs",     required_argument, 0, 'v'},
+        {"mm",       required_argument, 0, 'M'},
         {"dir",      required_argument, 0, 'r'},
         {"delay-us", required_argument, 0, 'u'},
         {"hold",     no_argument,       0, 'H'},
@@ -168,12 +173,13 @@ int main(int argc, char **argv) {
     };
 
     int opt, opt_index = 0;
-    while ((opt = getopt_long(argc, argv, "p:m:s:v:r:u:Hn", long_opts, &opt_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "p:m:s:v:M:r:u:Hn", long_opts, &opt_index)) != -1) {
         switch (opt) {
             case 'p': pattern  = optarg; break;
             case 'm': motor    = atoi(optarg); break;
             case 's': count    = atol(optarg); break;
             case 'v': count    = atol(optarg) * ACE_HALFSTEPS_PER_REV; break;
+            case 'M': count    = lround(atof(optarg) / ACE_MM_PER_HALFSTEP); break;
             case 'u': delay_us = (unsigned int)strtoul(optarg, NULL, 10); break;
             case 'H': hold     = 1; break;
             case 'n': dry_run  = 1; break;

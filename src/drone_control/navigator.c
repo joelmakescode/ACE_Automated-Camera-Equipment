@@ -10,15 +10,16 @@
 #include <stddef.h>
 #include <time.h>
 
-#define PATROL_HALF (ACE_PATROL_SPAN_MM / 2.0)
+#define PATROL_HALF_X (ACE_PATROL_SPAN_X_MM / 2.0)
+#define PATROL_HALF_Y (ACE_PATROL_SPAN_Y_MM / 2.0)
 
 static const double PATROL_PATH[][2] = {
-    { -PATROL_HALF, -PATROL_HALF },
-    {  PATROL_HALF,  PATROL_HALF },
-    {  0.0,          0.0         },
-    {  PATROL_HALF, -PATROL_HALF },
-    { -PATROL_HALF,  PATROL_HALF },
-    {  0.0,          0.0         },
+    { -PATROL_HALF_X, -PATROL_HALF_Y },
+    {  PATROL_HALF_X,  PATROL_HALF_Y },
+    {  0.0,            0.0           },
+    {  PATROL_HALF_X, -PATROL_HALF_Y },
+    { -PATROL_HALF_X,  PATROL_HALF_Y },
+    {  0.0,            0.0           },
 };
 
 #define PATROL_POINTS ((int)(sizeof(PATROL_PATH) / sizeof(PATROL_PATH[0])))
