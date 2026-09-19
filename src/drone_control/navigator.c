@@ -42,8 +42,8 @@ static double g_cmd_err_x = 0.0;
 static double g_cmd_err_y = 0.0;
 static int    g_worse_x = 0;
 static int    g_worse_y = 0;
-static int    g_warned_x = 0;
-static int    g_warned_y = 0;
+static int    g_wrong_x = 0;
+static int    g_wrong_y = 0;
 static int    g_warned_clip = 0;
 
 typedef struct {
@@ -125,8 +125,8 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     g_state        = NAV_PATROL;
     g_patrol_index = 0;
     g_ever_seen    = 0;
-    g_warned_x     = 0;
-    g_warned_y     = 0;
+    g_wrong_x      = 0;
+    g_wrong_y      = 0;
     g_warned_clip  = 0;
     g_fit_reported = 0;
     fit_reset(&g_fit_x);
@@ -143,31 +143,40 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     return 0;
 }
 
+static void report_wrong_way(const char *axis, int strikes,
+                             double was_px, double now_px) {
+    double nx = g_wrong_x ? -g_img_x : g_img_x;
+    double ny = g_wrong_y ? -g_img_y : g_img_y;
+
+    fprintf(stderr,
+            "\nDie Abweichung in %s waechst seit %d Korrekturen (%.0f -> %.0f px).\n"
+            "Die Plattform faehrt vom Objekt weg.\n",
+            axis, strikes, was_px, now_px);
+
+    if (g_wrong_x && g_wrong_y) {
+        fprintf(stderr, "Beide Achsen laufen falsch herum.\n");
+    }
+    fprintf(stderr,
+            "Sofort probieren: --image-to-field %+.0f,%+.0f\n"
+            "Passt es, gehoert es dauerhaft nach geometry.h:\n"
+            "  #define ACE_IMAGE_TO_FIELD_X  %+.1f\n"
+            "  #define ACE_IMAGE_TO_FIELD_Y  %+.1f\n\n",
+            nx, ny, nx, ny);
+}
+
 static void check_direction(double error_x, double error_y, int clipped) {
     if (!g_have_last_cmd || clipped) return;
 
     g_worse_x = (fabs(error_x) > fabs(g_cmd_err_x) + 3.0) ? g_worse_x + 1 : 0;
     g_worse_y = (fabs(error_y) > fabs(g_cmd_err_y) + 3.0) ? g_worse_y + 1 : 0;
 
-    if (g_worse_x >= ACE_WRONG_WAY_STRIKES && !g_warned_x) {
-        fprintf(stderr,
-                "\nDie Abweichung in x waechst seit %d Korrekturen (%.0f -> %.0f px).\n"
-                "Die Plattform faehrt vom Objekt weg. ACE_IMAGE_TO_FIELD_X in\n"
-                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n"
-                "Sofort probieren: --image-to-field %+.0f,%+.0f\n\n",
-                g_worse_x, fabs(g_cmd_err_x), fabs(error_x),
-                g_img_x, -g_img_x, -g_img_x, g_img_y);
-        g_warned_x = 1;
+    if (g_worse_x >= ACE_WRONG_WAY_STRIKES && !g_wrong_x) {
+        g_wrong_x = 1;
+        report_wrong_way("x", g_worse_x, fabs(g_cmd_err_x), fabs(error_x));
     }
-    if (g_worse_y >= ACE_WRONG_WAY_STRIKES && !g_warned_y) {
-        fprintf(stderr,
-                "\nDie Abweichung in y waechst seit %d Korrekturen (%.0f -> %.0f px).\n"
-                "Die Plattform faehrt vom Objekt weg. ACE_IMAGE_TO_FIELD_Y in\n"
-                "geometry.h steht auf %+.1f und muesste %+.1f sein.\n"
-                "Sofort probieren: --image-to-field %+.0f,%+.0f\n\n",
-                g_worse_y, fabs(g_cmd_err_y), fabs(error_y),
-                g_img_y, -g_img_y, g_img_x, -g_img_y);
-        g_warned_y = 1;
+    if (g_worse_y >= ACE_WRONG_WAY_STRIKES && !g_wrong_y) {
+        g_wrong_y = 1;
+        report_wrong_way("y", g_worse_y, fabs(g_cmd_err_y), fabs(error_y));
     }
 }
 

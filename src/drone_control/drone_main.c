@@ -304,6 +304,8 @@ int main(int argc, char **argv) {
 
     if (g_abort) printf("\nAbbruch.\n");
 
+    nav_print_scale();
+
     if (stream_on) bd_stream_stop();
 
     motion_release();
