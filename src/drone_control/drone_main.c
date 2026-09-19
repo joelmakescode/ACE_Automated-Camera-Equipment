@@ -286,11 +286,12 @@ int main(int argc, char **argv) {
             printf("frame=%-5ld %-9s found=%d", frame_num,
                    nav_state_name(nav_state()), result.found ? 1 : 0);
             if (result.found) {
-                printf(" px=%4.0f,%4.0f err=%+5.0f,%+5.0f",
+                printf(" px=%4.0f,%4.0f err=%+5.0f,%+5.0f%s",
                        result.x, result.y,
-                       result.x - width / 2.0, result.y - height / 2.0);
+                       result.x - width / 2.0, result.y - height / 2.0,
+                       result.clipped ? " RAND" : "     ");
             } else {
-                printf("                                ");
+                printf("                                     ");
             }
             printf("  pos=%+6.1f,%+6.1f  soll=%+6.1f,%+6.1f  zug=%+5.1f,%+5.1f mm%s\n",
                    x_mm, y_mm, to_x, to_y, shift_x, shift_y,

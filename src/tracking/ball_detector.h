@@ -16,6 +16,7 @@ typedef struct {
 
     typedef struct {
         bool found;
+        bool clipped;
         double x;
         double y;
         double radius;

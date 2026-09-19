@@ -44,6 +44,45 @@ static int    g_worse_x = 0;
 static int    g_worse_y = 0;
 static int    g_warned_x = 0;
 static int    g_warned_y = 0;
+static int    g_warned_clip = 0;
+
+typedef struct {
+    long   n;
+    double sp, se, spe, sp2;
+    double pmin, pmax;
+} Fit;
+
+static Fit g_fit_x;
+static Fit g_fit_y;
+static int g_fit_reported = 0;
+
+static void fit_reset(Fit *f) {
+    f->n = 0;
+    f->sp = f->se = f->spe = f->sp2 = 0.0;
+    f->pmin = f->pmax = 0.0;
+}
+
+static void fit_add(Fit *f, double p, double e) {
+    if (f->n == 0) { f->pmin = p; f->pmax = p; }
+    if (p < f->pmin) f->pmin = p;
+    if (p > f->pmax) f->pmax = p;
+    f->n++;
+    f->sp  += p;
+    f->se  += e;
+    f->spe += p * e;
+    f->sp2 += p * p;
+}
+
+static int fit_slope(const Fit *f, double *slope) {
+    if (f->n < 30 || (f->pmax - f->pmin) < 15.0) return 0;
+
+    double n   = (double)f->n;
+    double den = f->sp2 - f->sp * f->sp / n;
+    if (fabs(den) < 1e-6) return 0;
+
+    *slope = (f->spe - f->sp * f->se / n) / den;
+    return 1;
+}
 static double g_shift_x = 0.0;
 static double g_shift_y = 0.0;
 static double g_img_x = ACE_IMAGE_TO_FIELD_X;
@@ -88,6 +127,10 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     g_ever_seen    = 0;
     g_warned_x     = 0;
     g_warned_y     = 0;
+    g_warned_clip  = 0;
+    g_fit_reported = 0;
+    fit_reset(&g_fit_x);
+    fit_reset(&g_fit_y);
 
     forget_last_command();
     path_abort();
@@ -100,8 +143,8 @@ int nav_init(int frame_width, int frame_height, unsigned int step_delay_us) {
     return 0;
 }
 
-static void check_direction(double error_x, double error_y) {
-    if (!g_have_last_cmd) return;
+static void check_direction(double error_x, double error_y, int clipped) {
+    if (!g_have_last_cmd || clipped) return;
 
     g_worse_x = (fabs(error_x) > fabs(g_cmd_err_x) + 3.0) ? g_worse_x + 1 : 0;
     g_worse_y = (fabs(error_y) > fabs(g_cmd_err_y) + 3.0) ? g_worse_y + 1 : 0;
@@ -135,7 +178,18 @@ static void follow_object(const DetectionResult *result,
 
     double limit = (g_state == NAV_HOVER) ? ACE_HOVER_RELEASE_PX
                                           : ACE_CENTER_TOLERANCE_PX;
-    int centered = fabs(error_x) <= limit && fabs(error_y) <= limit;
+    int centered = !result->clipped &&
+                   fabs(error_x) <= limit && fabs(error_y) <= limit;
+
+    if (result->clipped && !g_warned_clip) {
+        fprintf(stderr,
+                "\nDas Objekt beruehrt den Bildrand. Der gemessene Mittelpunkt\n"
+                "klebt dann an der Kante und die Abweichung laesst sich nicht mehr\n"
+                "ausregeln. Objekt weiter in die Bildmitte legen oder %s\n"
+                "vergroessern.\n\n",
+                "ACE_CAMERA_HEIGHT_MM");
+        g_warned_clip = 1;
+    }
 
     if (centered) {
         if (g_state != NAV_HOVER) {
@@ -152,9 +206,23 @@ static void follow_object(const DetectionResult *result,
     }
     g_state = NAV_APPROACH;
 
+    if (!result->clipped) {
+        double mx, my;
+        kin_position(motor_steps, &mx, &my);
+        fit_add(&g_fit_x, mx, result->x);
+        fit_add(&g_fit_y, my, result->y);
+        if (!g_fit_reported) {
+            double a, b;
+            if (fit_slope(&g_fit_x, &a) && fit_slope(&g_fit_y, &b)) {
+                nav_print_scale();
+                g_fit_reported = 1;
+            }
+        }
+    }
+
     if (g_have_last_cmd && ms_since(&g_last_cmd) < ACE_REAIM_MS) return;
 
-    check_direction(error_x, error_y);
+    check_direction(error_x, error_y, result->clipped);
 
     double mm_per_pixel = ACE_VIEW_WIDTH_MM / (double)g_frame_width;
     double shift_x = clamp_abs(error_x * mm_per_pixel * ACE_CORRECTION_GAIN
@@ -224,6 +292,36 @@ void nav_target(double *x_mm, double *y_mm) {
 void nav_command(double *shift_x_mm, double *shift_y_mm) {
     if (shift_x_mm) *shift_x_mm = g_shift_x;
     if (shift_y_mm) *shift_y_mm = g_shift_y;
+}
+
+void nav_print_scale(void) {
+    double sx, sy;
+    int ok_x = fit_slope(&g_fit_x, &sx);
+    int ok_y = fit_slope(&g_fit_y, &sy);
+
+    printf("\nGemessener Zusammenhang Plattformweg -> Bildposition\n");
+    if (!ok_x && !ok_y) {
+        printf("  noch zu wenig Daten (x %ld Frames ueber %.0f mm, "
+               "y %ld ueber %.0f mm; noetig 30 Frames ueber 15 mm,\n"
+               "  und das Objekt darf den Bildrand nicht beruehren)\n\n",
+               g_fit_x.n, g_fit_x.pmax - g_fit_x.pmin,
+               g_fit_y.n, g_fit_y.pmax - g_fit_y.pmin);
+        return;
+    }
+
+    if (ok_x) {
+        printf("  x: %+6.2f px/mm aus %ld Frames ueber %.0f mm"
+               "  ->  ACE_IMAGE_TO_FIELD_X %+.1f, Sichtbreite %.0f mm\n",
+               sx, g_fit_x.n, g_fit_x.pmax - g_fit_x.pmin,
+               (sx > 0.0) ? -1.0 : 1.0, (double)g_frame_width / fabs(sx));
+    }
+    if (ok_y) {
+        printf("  y: %+6.2f px/mm aus %ld Frames ueber %.0f mm"
+               "  ->  ACE_IMAGE_TO_FIELD_Y %+.1f\n",
+               sy, g_fit_y.n, g_fit_y.pmax - g_fit_y.pmin,
+               (sy > 0.0) ? -1.0 : 1.0);
+    }
+    printf("  aktiv sind x %+.1f, y %+.1f\n\n", g_img_x, g_img_y);
 }
 
 void nav_set_image_to_field(double x, double y) {

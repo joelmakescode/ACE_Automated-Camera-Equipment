@@ -124,6 +124,7 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
     if (!bd || !range || !out_result) return -1;
 
     out_result->found = false;
+    out_result->clipped = false;
     out_result->x = 0.0;
     out_result->y = 0.0;
     out_result->radius = 0.0;
@@ -158,10 +159,16 @@ extern "C" int bd_detect(BallDetector *bd, const HsvRange *range, DetectionResul
     float radius = 0.0f;
     cv::minEnclosingCircle(contours[best_idx], center, radius);
 
-    out_result->found  = true;
-    out_result->x      = center.x;
-    out_result->y      = center.y;
-    out_result->radius = radius;
+    cv::Rect box = cv::boundingRect(contours[best_idx]);
+    const int margin = 2;
+
+    out_result->found   = true;
+    out_result->clipped = box.x <= margin || box.y <= margin ||
+                          box.x + box.width  >= bd->mask_buf.cols - margin ||
+                          box.y + box.height >= bd->mask_buf.rows - margin;
+    out_result->x       = center.x;
+    out_result->y       = center.y;
+    out_result->radius  = radius;
     return 0;
 }
 

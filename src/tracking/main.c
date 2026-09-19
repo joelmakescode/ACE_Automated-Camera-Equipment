@@ -190,8 +190,9 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        printf("frame=%ld found=%d x=%.1f y=%.1f radius=%.1f\n",
-               frame_num, result.found ? 1 : 0, result.x, result.y, result.radius);
+        printf("frame=%ld found=%d x=%.1f y=%.1f radius=%.1f%s\n",
+               frame_num, result.found ? 1 : 0, result.x, result.y, result.radius,
+               result.clipped ? "  AM BILDRAND ANGESCHNITTEN" : "");
 
         if (probe) {
             ProbeResult pr;

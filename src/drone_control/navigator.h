@@ -22,6 +22,7 @@ void        nav_target(double *x_mm, double *y_mm);
 void        nav_command(double *shift_x_mm, double *shift_y_mm);
 void        nav_set_image_to_field(double x, double y);
 void        nav_image_to_field(double *x, double *y);
+void        nav_print_scale(void);
 
 #ifdef __cplusplus
 }
