@@ -64,6 +64,7 @@ static int sample_object(BallDetector *detector, const HsvRange *range,
 }
 
 static int apply_tension(BallDetector *detector, const HsvRange *range,
+                         double at_x_mm, double at_y_mm,
                          unsigned int step_delay_us) {
     long steps[ACE_MOTOR_COUNT];
     long wind = lround(ACE_TENSION_MM / ACE_MM_PER_HALFSTEP);
@@ -75,11 +76,11 @@ static int apply_tension(BallDetector *detector, const HsvRange *range,
 
     long motors[ACE_MOTOR_COUNT];
     read_motors(motors);
-    kin_reset(0.0, 0.0, motors);
+    kin_reset(at_x_mm, at_y_mm, motors);
 
     printf("Leichte Spannung: alle vier Seile %.1f mm aufgewickelt (%ld Halbschritte),\n"
-           "Spulen bleiben bestromt, Mitte neu referenziert.\n",
-           ACE_TENSION_MM, wind);
+           "Spulen bleiben bestromt, Position x=%.0f y=%.0f neu referenziert.\n",
+           ACE_TENSION_MM, wind, at_x_mm, at_y_mm);
     return 0;
 }
 
@@ -94,7 +95,31 @@ int cal_center(BallDetector *detector, const HsvRange *range,
            start_x_mm, start_y_mm);
 
     if (move_to(detector, range, 0.0, 0.0, step_delay_us) != 0) return -1;
-    return apply_tension(detector, range, step_delay_us);
+    return apply_tension(detector, range, 0.0, 0.0, step_delay_us);
+}
+
+int cal_goto(BallDetector *detector, const HsvRange *range,
+             double start_x_mm, double start_y_mm,
+             double target_x_mm, double target_y_mm,
+             unsigned int step_delay_us) {
+    long motors[ACE_MOTOR_COUNT];
+    read_motors(motors);
+    kin_reset(start_x_mm, start_y_mm, motors);
+
+    long planned[ACE_MOTOR_COUNT];
+    kin_plan(motors, target_x_mm, target_y_mm, planned);
+
+    printf("Fahrt von x=%.0f y=%.0f nach x=%.0f y=%.0f\n",
+           start_x_mm, start_y_mm, target_x_mm, target_y_mm);
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
+        printf("  Motor %d (%-13s) %+7ld Halbschritte = %+7.1f mm Seil  %s\n",
+               i, ACE_MOTOR_NAMES[i], planned[i],
+               planned[i] * ACE_MM_PER_HALFSTEP,
+               planned[i] > 0 ? "kuerzer" : (planned[i] < 0 ? "laenger" : "-"));
+    }
+
+    if (move_to(detector, range, target_x_mm, target_y_mm, step_delay_us) != 0) return -1;
+    return apply_tension(detector, range, target_x_mm, target_y_mm, step_delay_us);
 }
 
 int cal_run(BallDetector *detector, const HsvRange *range,
@@ -119,7 +144,7 @@ int cal_run(BallDetector *detector, const HsvRange *range,
                 "Kein Objekt erkannt. Kalibrierung uebersprungen, HSV-Bereich pruefen "
                 "(--h-min/--h-max ...).\n");
         if (move_to(detector, range, 0.0, 0.0, step_delay_us) != 0) return -1;
-        apply_tension(detector, range, step_delay_us);
+        apply_tension(detector, range, 0.0, 0.0, step_delay_us);
         return -1;
     }
 
@@ -143,7 +168,7 @@ int cal_run(BallDetector *detector, const HsvRange *range,
         fprintf(stderr, "Objekt nach der x-Fahrt verloren, Abstand verkleinern "
                         "(--calib-mm).\n");
         move_to(detector, range, 0.0, 0.0, step_delay_us);
-        apply_tension(detector, range, step_delay_us);
+        apply_tension(detector, range, 0.0, 0.0, step_delay_us);
         return -1;
     }
 
@@ -156,7 +181,7 @@ int cal_run(BallDetector *detector, const HsvRange *range,
         fprintf(stderr, "Objekt nach der y-Fahrt verloren, Abstand verkleinern "
                         "(--calib-mm).\n");
         move_to(detector, range, 0.0, 0.0, step_delay_us);
-        apply_tension(detector, range, step_delay_us);
+        apply_tension(detector, range, 0.0, 0.0, step_delay_us);
         return -1;
     }
 
@@ -169,7 +194,7 @@ int cal_run(BallDetector *detector, const HsvRange *range,
                 "Bildverschiebung zu klein (%.1f / %.1f px). Entweder hat sich die "
                 "Plattform nicht bewegt (Seil rutscht, Motor verliert Schritte) oder "
                 "der Fahrweg ist zu kurz.\n", shift_x_px, shift_y_px);
-        apply_tension(detector, range, step_delay_us);
+        apply_tension(detector, range, 0.0, 0.0, step_delay_us);
         return -1;
     }
 
@@ -196,7 +221,7 @@ int cal_run(BallDetector *detector, const HsvRange *range,
                mm_per_px_x * (double)frame_width);
         printf("  #define ACE_IMAGE_TO_FIELD_X  %.1f\n", sign_x);
         printf("  #define ACE_IMAGE_TO_FIELD_Y  %.1f\n\n", sign_y);
-        return apply_tension(detector, range, step_delay_us);
+        return apply_tension(detector, range, 0.0, 0.0, step_delay_us);
     }
 
     double travel_x_mm = fabs(shift_x_px) * scale_mm_per_px;
@@ -228,5 +253,5 @@ int cal_run(BallDetector *detector, const HsvRange *range,
     printf("Danach neu bauen und einmal nachkalibrieren: der Faktor muss dann "
            "nahe 1.000 liegen.\n");
 
-    return apply_tension(detector, range, step_delay_us);
+    return apply_tension(detector, range, 0.0, 0.0, step_delay_us);
 }
