@@ -45,6 +45,7 @@ typedef struct {
     double        probe_mm;
     long          settle_ms;
     int           quiet;
+    int           stream_on;
 
     int    weak;                /* Winde, die Schritte verliert, -1 = keine */
     double slip_total_mm;       /* seit dem letzten Referenzieren           */
@@ -56,8 +57,11 @@ typedef struct {
     int    height_warned;
 
     long   cycles;
+    long   observations;        /* Messungen waehrend der Fahrten */
     int    relearns;
     int    lost;
+    int    drift_warned;
+    int    cable_warned;
 } Tracker;
 
 /* Lage des Objekts relativ zur Bildmitte, gemittelt ueber mehrere Treffer.
@@ -71,6 +75,8 @@ static int measure(Tracker *t, double *err_u, double *err_v, double *radius) {
     for (int f = 0; f < ACE_TRACK_SAMPLE_FRAMES && !g_abort; f++) {
         DetectionResult r;
         if (bd_detect(t->cam, &t->range, &r) != 0) return -1;
+
+        if (t->stream_on) bd_stream_push(t->cam, &r);
 
         if (r.found) {
             sum_u += r.x - t->width  / 2.0;
@@ -120,12 +126,72 @@ static double read_height(Tracker *t) {
     return h;
 }
 
-/* Fahrt abwarten und dabei weiter Bilder holen, damit die Pipe nicht
- * volllaeuft und die Messung danach aktuell ist. */
+static double now_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+/* Eine einzelne Beobachtung waehrend der Fahrt einarbeiten.
+ *
+ * Gemessen wird nicht einmal je Zug, sondern laufend ueber kurze
+ * Basislinien. Das ist gegen das ziehende HDMI-Kabel gerichtet: dreht sich
+ * die Kamera um einen Winkel, verschiebt das die Objektlage um die
+ * Bildmitte, und dieser Stoerterm waechst mit dem aktuellen Bildfehler.
+ * Ueber einen ganzen Zug hinweg faengt man ihn voll ein, ueber ein paar
+ * Millimeter nur einen Bruchteil davon. */
+static void feed_observation(Tracker *t, double from_x, double from_y,
+                             double eu0, double ev0,
+                             double to_x, double to_y,
+                             double eu1, double ev1) {
+    vis_observe(&t->vis, to_x - from_x, to_y - from_y,
+                eu0, ev0, eu1, ev1,
+                ACE_VIS_GATE_REL, ACE_VIS_GATE_PX, now_seconds());
+}
+
+/* Massstab an den aktuellen Kameraabstand koppeln. Die Plattform haengt,
+ * ihre Hoehe ist keine Konstante, und Pixel je mm gehen mit 1/Abstand. */
+static void sync_scale_to_height(Tracker *t) {
+    double h = read_height(t);
+    double camera_above_floor = ACE_RIG_HEIGHT_MM - h;
+
+    if (camera_above_floor > 10.0) {
+        vis_set_camera_distance(&t->vis, camera_above_floor);
+    }
+}
+
+/* Fahrt abwarten und dabei weiter Bilder holen: das haelt die Kamerapipe
+ * leer und liefert nebenbei die laufenden Messungen. */
 static int drive_and_drain(Tracker *t) {
+    int    have_anchor = 0;
+    double ax = 0.0, ay = 0.0, aeu = 0.0, aev = 0.0;
+
     while (path_busy() && !g_abort) {
-        DetectionResult ignored;
-        if (bd_detect(t->cam, &t->range, &ignored) != 0) return -1;
+        DetectionResult seen;
+        if (bd_detect(t->cam, &t->range, &seen) != 0) return -1;
+        if (t->stream_on) bd_stream_push(t->cam, &seen);
+        if (!seen.found) continue;
+
+        long   steps[ACE_MOTOR_COUNT];
+        double x, y;
+        motion_positions(steps);
+        kin_position(steps, &x, &y);
+
+        double eu = seen.x - t->width  / 2.0;
+        double ev = seen.y - t->height / 2.0;
+
+        if (!have_anchor) {
+            ax = x; ay = y; aeu = eu; aev = ev;
+            have_anchor = 1;
+            continue;
+        }
+
+        double base = sqrt((x - ax) * (x - ax) + (y - ay) * (y - ay));
+        if (base >= ACE_TRACK_BASELINE_MM) {
+            feed_observation(t, ax, ay, aeu, aev, x, y, eu, ev);
+            t->observations++;
+            ax = x; ay = y; aeu = eu; aev = ev;
+        }
     }
     if (g_abort) { path_abort(); return 1; }
 
@@ -139,8 +205,9 @@ static int drive_and_drain(Tracker *t) {
                     + (now.tv_nsec - t0.tv_nsec) / 1000000L;
             if (ms >= t->settle_ms || g_abort) break;
 
-            DetectionResult ignored;
-            if (bd_detect(t->cam, &t->range, &ignored) != 0) return -1;
+            DetectionResult seen;
+            if (bd_detect(t->cam, &t->range, &seen) != 0) return -1;
+            if (t->stream_on) bd_stream_push(t->cam, &seen);
         }
     }
     return 0;
@@ -148,10 +215,14 @@ static int drive_and_drain(Tracker *t) {
 
 /* ---------------------------------------------------- schwache Winde */
 
-/* Der Schlupf ist messbar, weil die Lage aus den uebrigen drei Winden
- * vollstaendig bestimmt ist: die Laenge, die diese Lage fuer die schwache
- * Winde fordert, gegen die Laenge, die ihr Schrittzaehler behauptet. Das
- * braucht keine Kamera und keine Annahme ueber die Ursache. */
+/* Ueberwacht die Selbstkonsistenz des Modells fuer die schwache Winde.
+ *
+ * Kein Schlupfmesser - siehe kin_length_residual. Ein echtes Durchrutschen
+ * bleibt hier unsichtbar, weil der Schrittzaehler Kommandos zaehlt und die
+ * vier Modellaengen per Konstruktion zusammenpassen. Der Wert schlaegt bei
+ * Rundungsdrift oder verstellter Referenz an, nicht bei rutschender
+ * Mechanik. Gegen die hilft im laufenden Betrieb allein der Bildregelkreis,
+ * der ohnehin auf das Bild und nicht auf die Koppelnavigation regelt. */
 static void check_slip(Tracker *t) {
     if (t->weak < 0) return;
 
@@ -232,8 +303,9 @@ static int learn(Tracker *t) {
         drop_u[good]   = eu0 - eu1;
         drop_v[good]   = ev0 - ev1;
 
-        vis_update(&t->vis, probe_dx[good], probe_dy[good],
-                   drop_u[good], drop_v[good], 1e9, 1e9);
+        sync_scale_to_height(t);
+        vis_update_at(&t->vis, probe_dx[good], probe_dy[good],
+                      drop_u[good], drop_v[good], 1e9, 1e9, now_seconds());
         good++;
 
         check_slip(t);
@@ -299,6 +371,31 @@ static int follow(Tracker *t, long max_cycles) {
 
         double err = sqrt(eu * eu + ev * ev);
         t->cycles++;
+
+        sync_scale_to_height(t);
+
+        /* Die Streuung misst das Zufaellige in der Mechanik. Ein
+         * gleichbleibender Verlust steckt im Massstab und stoert nicht. */
+        if (!t->drift_warned && t->vis.drift_count > 20 &&
+            vis_drift_rms_mm(&t->vis) > ACE_DRIFT_WARN_MM) {
+            t->drift_warned = 1;
+            fprintf(stderr,
+                    "\nKoppelnavigation und Bild weichen um %.1f mm (RMS) "
+                    "voneinander ab.\nDas ist der zufaellige Anteil - eine "
+                    "rutschende Winde sieht genau so aus.\nDer Regelkreis "
+                    "faengt es ab, die angezeigte Lage wird aber ungenau.\n",
+                    vis_drift_rms_mm(&t->vis));
+        }
+        if (!t->cable_warned &&
+            fabs(vis_angle_rate_dps(&t->vis)) > ACE_ANGLE_RATE_WARN_DPS) {
+            t->cable_warned = 1;
+            fprintf(stderr,
+                    "\nDer Kamerawinkel wandert mit %.1f Grad/s. Das Kabel "
+                    "zieht waehrend der Fahrt.\nGemessen wird ohnehin laufend "
+                    "ueber kurze Strecken, die Schaetzung kommt also mit -\n"
+                    "aber eine Zugentlastung am HDMI-Kabel waere das Richtige.\n",
+                    vis_angle_rate_dps(&t->vis));
+        }
 
         if (err <= t->tolerance_px) {
             double h = read_height(t);
@@ -391,14 +488,16 @@ static void print_setup(const Tracker *t) {
            acos(t->gain / 2.0 > 1.0 ? 1.0 : t->gain / 2.0) * 180.0 / ACE_PI);
 
     if (t->weak >= 0) {
-        printf("Schwache Winde %d (%s): aus der Lageschaetzung genommen.\n",
+        printf("Schwache Winde %d (%s): aus der Lageschaetzung genommen,\n",
                t->weak, ACE_MOTOR_NAMES[t->weak]);
-        printf("               Die Lage kommt aus den anderen drei, dadurch ist\n"
-               "               der Schlupf dieser Winde messbar. Warnung ab\n"
-               "               %.1f mm, neu referenziert ab %.1f mm.\n",
-               (double)ACE_SLIP_WARN_MM, (double)ACE_SLIP_RECOVER_MM);
-        printf("               Vorspannung %.1f mm, damit ihr Seil straff bleibt.\n",
+        printf("               die Lage kommt aus den anderen drei.\n");
+        printf("               Vorspannung %.1f mm, damit ihr Seil straff bleibt\n"
+               "               und seltener rutscht.\n",
                (double)ACE_WEAK_PRELOAD_MM);
+        printf("               Ein Durchrutschen selbst ist per Koppelnavigation\n"
+               "               nicht messbar: der Schrittzaehler zaehlt Kommandos.\n"
+               "               Aufgefangen wird es vom Bildregelkreis, der auf das\n"
+               "               Bild regelt und nicht auf die gerechnete Lage.\n");
 
         double margin = figure_margin_without(t->weak, 0.0, 0.0);
         printf("Arbeitsraum    Faellt sie ganz aus, tragen drei Seile nur noch\n"
@@ -423,8 +522,23 @@ static void print_result(const Tracker *t) {
            "  (Sichtbreite %.0f mm)\n",
            vis_angle_deg(&t->vis), vis_scale_px_per_mm(&t->vis),
            vis_view_width_mm(&t->vis, t->width));
-    printf("  Messungen uebernommen        %d, verworfen %d\n",
-           t->vis.samples, t->vis.rejected);
+    printf("  Messungen uebernommen        %d, verworfen %d"
+           "  (%ld waehrend der Fahrten)\n",
+           t->vis.samples, t->vis.rejected, t->observations);
+    printf("  Kamerawinkel wandert mit     %+.2f Grad/s%s\n",
+           vis_angle_rate_dps(&t->vis),
+           fabs(vis_angle_rate_dps(&t->vis)) > ACE_ANGLE_RATE_WARN_DPS
+               ? "   (Kabel zieht)" : "");
+
+    if (t->vis.drift_count > 0) {
+        printf("  Koppelnavigation ./. Bild    %.2f mm RMS, schlechtestens %.2f mm\n",
+               vis_drift_rms_mm(&t->vis), vis_drift_worst_mm(&t->vis));
+        printf("                               aus %ld Messungen. Das ist der\n"
+               "                               zufaellige Anteil; ein gleich-\n"
+               "                               bleibender Verlust steckt im\n"
+               "                               Massstab und stoert nicht.\n",
+               t->vis.drift_count);
+    }
     printf("  Bilder ohne Objekt           %d\n", t->lost);
 
     if (t->height_max_mm > t->height_min_mm) {
@@ -482,12 +596,23 @@ static void print_usage(const char *prog) {
         "  --cycles N     nach N Zuegen beenden, Standard 0 = endlos\n"
         "  --tension MM   vor dem Start alle vier Seile anspannen\n"
         "  --stream       Livebild mit Markierung auf Port 8080\n"
+        "  --jpeg Q       JPEG-Guete des Streams 1..100, Standard 70\n"
+        "  --stream-scale F  Bild vorher verkleinern, 0.1..1.0, Standard 0.5.\n"
+        "                 Halbe Kante = ein Viertel Datenmenge. Betrifft nur\n"
+        "                 den Stream, nicht die Erkennung\n"
+        "  --focus MODE   manual, continuous, auto oder default.\n"
+        "                 Standard manual: der Abstand steht fest, ein\n"
+        "                 pumpender Autofokus brachte nur Unschaerfe und\n"
+        "                 einen wandernden Massstab\n"
+        "  --lens DPT     Linsenposition in Dioptrien, also 1/Abstand[m].\n"
+        "                 Standard %.2f, passend zu %.0f mm aus geometry.h\n"
         "\n"
         "Farbe: Standard Rot, h %d-%d s %d-%d v %d-%d. Ist h-min groesser als\n"
         "       h-max, wird ueber den Nullpunkt der Hue-Skala hinweg gesucht.\n",
         prog, ACE_WEAK_MOTOR, (double)ACE_WEAK_PRELOAD_MM,
         (double)ACE_TRACK_PROBE_MM, (double)ACE_TRACK_GAIN,
         (double)ACE_TRACK_TOLERANCE_PX, (double)ACE_TRACK_MAX_STEP_MM,
+        1000.0 / ACE_CAMERA_HEIGHT_MM, (double)ACE_CAMERA_HEIGHT_MM,
         d.h_min, d.h_max, d.s_min, d.s_max, d.v_min, d.v_max);
 }
 
@@ -497,6 +622,12 @@ int main(int argc, char **argv) {
     int         height      = 720;
     int         stream_on   = 0;
     int         stream_port = 8080;
+    int         jpeg_quality  = 70;
+    double      stream_scale  = 0.5;
+    const char *focus_mode    = "manual";
+    /* Dioptrien = 1 / Abstand in Metern. Der Abstand steht fest in
+     * geometry.h, also laesst sich die Linsenposition ausrechnen. */
+    double      lens_position = 1000.0 / ACE_CAMERA_HEIGHT_MM;
     int         do_learn    = 1;
     int         dry_run     = 0;
     int         wait_s      = ACE_FIGURE_WAIT_S;
@@ -513,6 +644,7 @@ int main(int argc, char **argv) {
     t.probe_mm     = ACE_TRACK_PROBE_MM;
     t.settle_ms    = ACE_TRACK_SETTLE_MS;
     t.quiet        = 0;
+    t.stream_on    = 0;
     t.weak         = ACE_WEAK_MOTOR;
     t.slip_total_mm = 0.0;
     t.slip_events  = 0;
@@ -521,8 +653,11 @@ int main(int argc, char **argv) {
     t.height_max_mm = -1e9;
     t.height_warned = 0;
     t.cycles       = 0;
+    t.observations = 0;
     t.relearns     = 0;
     t.lost         = 0;
+    t.drift_warned = 0;
+    t.cable_warned = 0;
     t.cam          = NULL;
 
     static struct option lo[] = {
@@ -544,6 +679,10 @@ int main(int argc, char **argv) {
         {"wait",        required_argument, 0, 'a'},
         {"dry-run",     no_argument,       0, 'n'},
         {"quiet",       no_argument,       0, 'q'},
+        {"focus",       required_argument, 0, 'f'},
+        {"lens",        required_argument, 0, 'l'},
+        {"jpeg",        required_argument, 0, 'j'},
+        {"stream-scale",required_argument, 0, 'z'},
         {"h-min",       required_argument, 0, 1},
         {"h-max",       required_argument, 0, 2},
         {"s-min",       required_argument, 0, 3},
@@ -555,9 +694,14 @@ int main(int argc, char **argv) {
     };
 
     int opt, oi = 0;
-    while ((opt = getopt_long(argc, argv, "d:w:H:t::W:P:Lg:e:M:b:u:c:T:S:a:nq",
+    while ((opt = getopt_long(argc, argv,
+                              "d:w:H:t::W:P:Lg:e:M:b:u:c:T:S:a:nqf:l:j:z:",
                               lo, &oi)) != -1) {
         switch (opt) {
+            case 'f': focus_mode     = optarg; break;
+            case 'l': lens_position  = atof(optarg); break;
+            case 'j': jpeg_quality   = atoi(optarg); break;
+            case 'z': stream_scale   = atof(optarg); break;
             case 'd': device         = optarg; break;
             case 'w': width          = atoi(optarg); break;
             case 'H': height         = atoi(optarg); break;
@@ -615,12 +759,35 @@ int main(int argc, char **argv) {
     t.width  = width;
     t.height = height;
 
+    /* Schon hier belegen, nicht erst nach dem Countdown: bricht der Nutzer
+     * vorher ab, liest der Schlussbericht sonst uninitialisierten Speicher. */
+    vis_init(&t.vis, (double)width / ACE_VIEW_WIDTH_MM, 0.0, ACE_VIS_LAMBDA);
+
+    /* ACE_VIEW_WIDTH_MM gilt fuer den Nennabstand. Ab hier wird der
+     * Massstab an den wirklich gemessenen Abstand gekoppelt. */
+    vis_set_camera_distance(&t.vis, ACE_CAMERA_HEIGHT_MM);
+
     print_setup(&t);
 
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
     if (dry_run) stepper_set_dry_run(1);
+
+    /* Vor bd_create_camera: der Fokus geht in die Kommandozeile von
+     * rpicam-vid ein. Fester Abstand, also fester Fokus - ein pumpender
+     * Autofokus bringt Unschaerfe und einen wandernden Massstab, und beides
+     * verfaelscht das Bildmodell. */
+    bd_set_focus(focus_mode, lens_position);
+    bd_set_stream_quality(jpeg_quality);
+    bd_set_stream_scale(stream_scale);
+
+    printf("Kamera         Fokus %s", focus_mode);
+    if (focus_mode && focus_mode[0] == 'm') {
+        printf(", Linse %.2f dpt (= %.0f mm Abstand)",
+               lens_position, lens_position > 0.0 ? 1000.0 / lens_position : 0.0);
+    }
+    printf("\n\n");
 
     t.cam = bd_create_camera(device, width, height);
     if (!t.cam) {
@@ -643,7 +810,10 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Stream-Server auf Port %d fehlgeschlagen.\n",
                     stream_port);
         } else {
-            fprintf(stderr, "Livebild unter http://<pi-ip>:%d/\n", stream_port);
+            t.stream_on = 1;
+            fprintf(stderr, "Livebild unter http://<pi-ip>:%d/  "
+                            "(Guete %d, Groesse %.0f %%)\n",
+                    stream_port, jpeg_quality, stream_scale * 100.0);
         }
     }
 

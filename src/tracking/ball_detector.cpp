@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
+#include <memory>
 #include <atomic>
 #include <chrono>
 
@@ -40,6 +42,16 @@ extern "C" HsvRange bd_default_hsv_range(void) {
     return range;
 }
 
+/* Fokus: fest auf den Arbeitsabstand, nicht automatisch. Siehe Kommentar an
+ * bd_set_focus in der Kopfdatei. */
+static std::string g_focus_mode     = "manual";
+static double      g_lens_position  = 2.5;   /* Dioptrien, 1/0.4 m */
+
+extern "C" void bd_set_focus(const char *mode, double lens_position) {
+    if (mode && *mode) g_focus_mode = mode;
+    g_lens_position = lens_position;
+}
+
 extern "C" BallDetector *bd_create_camera(const char *device_path, int width, int height) {
     (void)device_path;
 
@@ -52,7 +64,17 @@ extern "C" BallDetector *bd_create_camera(const char *device_path, int width, in
     std::string cmd = "rpicam-vid --nopreview -t 0 --codec yuv420"
                        " --width " + std::to_string(bd->cam_width) +
                        " --height " + std::to_string(bd->cam_height) +
-                       " --framerate 15 -o - 2>/dev/null";
+                       " --framerate 15";
+
+    if (g_focus_mode != "default") {
+        cmd += " --autofocus-mode " + g_focus_mode;
+        if (g_focus_mode == "manual") {
+            char pos[32];
+            std::snprintf(pos, sizeof(pos), "%.3f", g_lens_position);
+            cmd += std::string(" --lens-position ") + pos;
+        }
+    }
+    cmd += " -o - 2>/dev/null";
 
     bd->pipe = popen(cmd.c_str(), "r");
     if (!bd->pipe) {
@@ -316,57 +338,183 @@ namespace {
     std::atomic<bool> g_stream_running{false};
     int g_listen_fd = -1;
     std::thread g_accept_thread;
-    std::mutex g_frame_mutex;
-    std::vector<uchar> g_latest_jpeg;
-    std::mutex g_clients_mutex;
-    std::vector<std::thread> g_client_threads;
 
-    void stream_client_loop(int client_fd) {
-        const char *header =
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
-            "Cache-Control: no-cache\r\n"
-            "Connection: close\r\n\r\n";
-        if (send(client_fd, header, std::strlen(header), 0) < 0) {
-            close(client_fd);
+    std::mutex              g_frame_mutex;
+    std::condition_variable g_frame_cv;
+    std::vector<uchar>      g_latest_jpeg;
+    unsigned long           g_frame_seq = 0;   /* zaehlt jedes neue Bild */
+
+    /* Der Thread meldet ueber das Flag, dass er fertig ist - nur dann darf
+     * er eingesammelt werden, ohne zu blockieren. */
+    struct ClientSlot {
+        std::thread                        thread;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+
+    std::mutex              g_clients_mutex;
+    std::vector<ClientSlot> g_client_threads;
+
+    std::atomic<int>    g_jpeg_quality{70};
+    std::atomic<double> g_stream_scale{1.0};
+
+    /* Ohne MSG_NOSIGNAL beendet ein geschlossener Browser-Tab per SIGPIPE
+     * den ganzen Prozess - mitten in der Fahrt. */
+    bool send_all(int fd, const void *data, size_t len) {
+        const char *p = static_cast<const char *>(data);
+        while (len > 0) {
+            ssize_t n = send(fd, p, len, MSG_NOSIGNAL);
+            if (n <= 0) return false;
+            p   += n;
+            len -= static_cast<size_t>(n);
+        }
+        return true;
+    }
+
+    bool send_text(int fd, const char *s) {
+        return send_all(fd, s, std::strlen(s));
+    }
+
+    /* Erste Zeile der Anfrage lesen und den Pfad herausziehen. Die Anfrage
+     * wurde vorher gar nicht gelesen - dadurch bekam auch /favicon.ico einen
+     * endlosen Bildstrom, und der Ladebalken des Tabs kam nie zur Ruhe. */
+    bool read_path(int client_fd, std::string &path) {
+        char    buf[1024];
+        ssize_t n = recv(client_fd, buf, sizeof(buf) - 1, 0);
+        if (n <= 0) return false;
+        buf[n] = '\0';
+
+        const char *sp1 = std::strchr(buf, ' ');
+        if (!sp1) return false;
+        const char *sp2 = std::strchr(sp1 + 1, ' ');
+        if (!sp2) return false;
+
+        path.assign(sp1 + 1, static_cast<size_t>(sp2 - sp1 - 1));
+        size_t q = path.find('?');
+        if (q != std::string::npos) path.erase(q);
+        return true;
+    }
+
+    void serve_index(int client_fd) {
+        static const char *body =
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+            "<title>ACE</title><style>"
+            "html,body{margin:0;height:100%;background:#111;}"
+            "body{display:flex;align-items:center;justify-content:center;}"
+            "img{max-width:100%;max-height:100vh;image-rendering:auto;}"
+            "</style></head><body><img src=\"/stream.mjpg\" alt=\"Kamera\">"
+            "</body></html>";
+
+        char head[256];
+        std::snprintf(head, sizeof(head),
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+            "Content-Length: %zu\r\nConnection: close\r\n\r\n",
+            std::strlen(body));
+
+        if (send_text(client_fd, head)) send_text(client_fd, body);
+    }
+
+    void serve_404(int client_fd) {
+        send_text(client_fd,
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"
+            "Connection: close\r\n\r\n");
+    }
+
+    void serve_stream(int client_fd) {
+        if (!send_text(client_fd,
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+                "Cache-Control: no-cache, private\r\n"
+                "Pragma: no-cache\r\n"
+                "Connection: close\r\n\r\n")) {
             return;
         }
+
+        unsigned long seen = 0;
 
         while (g_stream_running) {
             std::vector<uchar> jpeg_copy;
             {
-                std::lock_guard<std::mutex> lock(g_frame_mutex);
+                /* Auf ein wirklich neues Bild warten, statt dasselbe im
+                 * Takt erneut zu schicken. */
+                std::unique_lock<std::mutex> lock(g_frame_mutex);
+                g_frame_cv.wait_for(lock, std::chrono::milliseconds(250),
+                                    [&] { return !g_stream_running ||
+                                                 g_frame_seq != seen; });
+                if (!g_stream_running) break;
+                if (g_frame_seq == seen || g_latest_jpeg.empty()) continue;
+
+                seen      = g_frame_seq;
                 jpeg_copy = g_latest_jpeg;
             }
-            if (jpeg_copy.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                continue;
-            }
 
-            char part_header[128];
-            int hlen = std::snprintf(part_header, sizeof(part_header),
+            char part[128];
+            int  hlen = std::snprintf(part, sizeof(part),
                 "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n",
                 jpeg_copy.size());
-            if (send(client_fd, part_header, hlen, 0) < 0) break;
-            if (send(client_fd, jpeg_copy.data(), jpeg_copy.size(), 0) < 0) break;
-            if (send(client_fd, "\r\n", 2, 0) < 0) break;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(66)); /* ~15 fps */
+            if (!send_all(client_fd, part, static_cast<size_t>(hlen))) break;
+            if (!send_all(client_fd, jpeg_copy.data(), jpeg_copy.size())) break;
+            if (!send_all(client_fd, "\r\n", 2)) break;
+        }
+    }
+
+    void stream_client_loop(int client_fd) {
+        /* Ein Client, der verbindet und nichts sendet, darf keinen Thread
+         * auf Dauer binden. */
+        struct timeval tv = { 5, 0 };
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        std::string path;
+        if (read_path(client_fd, path)) {
+            if (path == "/stream.mjpg" || path == "/stream" || path == "/video") {
+                serve_stream(client_fd);
+            } else if (path == "/" || path == "/index.html") {
+                serve_index(client_fd);
+            } else {
+                serve_404(client_fd);      /* auch /favicon.ico */
+            }
         }
         close(client_fd);
+    }
+
+    /* Threads beendeter Clients einsammeln, sonst waechst die Liste mit
+     * jedem Neuladen der Seite. */
+    void reap_clients() {
+        std::lock_guard<std::mutex> lock(g_clients_mutex);
+        for (auto it = g_client_threads.begin(); it != g_client_threads.end(); ) {
+            if (it->done->load()) {
+                if (it->thread.joinable()) it->thread.join();
+                it = g_client_threads.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     void stream_accept_loop() {
         while (g_stream_running) {
             sockaddr_in client_addr{};
             socklen_t addr_len = sizeof(client_addr);
-            int client_fd = accept(g_listen_fd, reinterpret_cast<sockaddr *>(&client_addr), &addr_len);
+            int client_fd = accept(g_listen_fd,
+                                   reinterpret_cast<sockaddr *>(&client_addr),
+                                   &addr_len);
             if (client_fd < 0) {
                 if (!g_stream_running) break;
+                /* Bei dauerhaftem Fehler nicht heisslaufen. */
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
+
+            reap_clients();
+
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            std::thread th([client_fd, done] {
+                stream_client_loop(client_fd);
+                done->store(true);
+            });
+
             std::lock_guard<std::mutex> lock(g_clients_mutex);
-            g_client_threads.emplace_back(stream_client_loop, client_fd);
+            g_client_threads.push_back(ClientSlot{ std::move(th), done });
         }
     }
 }
@@ -400,23 +548,52 @@ extern "C" int bd_stream_start(int port) {
     return 0;
 }
 
+extern "C" void bd_set_stream_quality(int quality) {
+    if (quality < 1)   quality = 1;
+    if (quality > 100) quality = 100;
+    g_jpeg_quality = quality;
+}
+
+extern "C" void bd_set_stream_scale(double factor) {
+    if (factor < 0.1) factor = 0.1;
+    if (factor > 1.0) factor = 1.0;
+    g_stream_scale = factor;
+}
+
 extern "C" int bd_stream_push(BallDetector *bd, const DetectionResult *result) {
     if (!bd || !result || !g_stream_running) return -1;
 
     cv::Mat annotated = view_for_output(bd, result);
     if (annotated.empty()) return -1;
 
-    std::vector<uchar> jpeg_buf;
-    cv::imencode(".jpg", annotated, jpeg_buf);
+    double scale = g_stream_scale.load();
+    if (scale < 0.999) {
+        cv::Mat small;
+        cv::resize(annotated, small, cv::Size(), scale, scale, cv::INTER_AREA);
+        annotated = small;
+    }
 
-    std::lock_guard<std::mutex> lock(g_frame_mutex);
-    g_latest_jpeg = std::move(jpeg_buf);
+    std::vector<int> params = { cv::IMWRITE_JPEG_QUALITY, g_jpeg_quality.load() };
+
+    std::vector<uchar> jpeg_buf;
+    if (!cv::imencode(".jpg", annotated, jpeg_buf, params)) return -1;
+
+    {
+        std::lock_guard<std::mutex> lock(g_frame_mutex);
+        g_latest_jpeg = std::move(jpeg_buf);
+        g_frame_seq++;
+    }
+    g_frame_cv.notify_all();
     return 0;
 }
 
 extern "C" void bd_stream_stop(void) {
     if (!g_stream_running) return;
     g_stream_running = false;
+
+    /* Wartende Client-Threads aufwecken, sonst haengen sie bis zum
+     * Zeitablauf in der Bedingungsvariablen. */
+    g_frame_cv.notify_all();
 
     if (g_listen_fd >= 0) {
         shutdown(g_listen_fd, SHUT_RDWR);
@@ -426,8 +603,8 @@ extern "C" void bd_stream_stop(void) {
     if (g_accept_thread.joinable()) g_accept_thread.join();
 
     std::lock_guard<std::mutex> lock(g_clients_mutex);
-    for (auto &t : g_client_threads) {
-        if (t.joinable()) t.join();
+    for (auto &c : g_client_threads) {
+        if (c.thread.joinable()) c.thread.join();
     }
     g_client_threads.clear();
 }

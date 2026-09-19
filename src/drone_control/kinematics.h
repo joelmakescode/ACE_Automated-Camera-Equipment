@@ -94,9 +94,20 @@ void kin_anchor(int motor, double *x_mm, double *y_mm);
 void kin_set_untrusted(int motor);
 int  kin_untrusted(void);
 
-/* Aufgelaufener Schlupf: koppelnavigierte Laenge minus der Laenge, die die
- * Lage aus den uebrigen Winden fordert. Positiv heisst, das Seil ist in
- * Wirklichkeit kuerzer als das Modell denkt - die Winde hat abgewickelt. */
+/* Abweichung der koppelnavigierten Laenge dieser Winde von der Laenge, die
+ * kin_plan an der aus den uebrigen Winden bestimmten Lage vorschreibt.
+ *
+ * ACHTUNG, was das NICHT ist: ein Schlupfmesser. Der Schrittzaehler zaehlt
+ * Kommandos, keine Umdrehungen, und kin_plan treibt alle vier Modellaengen
+ * auf einen gemeinsamen Punkt. Sie sind damit per Konstruktion
+ * widerspruchsfrei - gleichgueltig, was die Mechanik wirklich getan hat.
+ * Rutscht eine Winde durch, bleibt dieser Wert bei null.
+ *
+ * Was er misst, ist die Selbstkonsistenz des Modells: Rundung auf ganze
+ * Halbschritte, ein Wegpunktabstand, der zu gross gewaehlt wurde, oder eine
+ * von aussen veraenderte Referenz. Mehr kann Koppelnavigation ohne Geber
+ * grundsaetzlich nicht leisten; die einzige unabhaengige Messung im Aufbau
+ * ist die Kamera. */
 double kin_length_residual(int motor, const long motor_steps[ACE_MOTOR_COUNT]);
 
 /* Nur diese eine Winde neu referenzieren, ohne die anderen anzufassen. */

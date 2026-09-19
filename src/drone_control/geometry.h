@@ -299,4 +299,26 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_HEIGHT_DRIFT_WARN_MM 8.0
 #endif
 
+/* ---- Laufendes Messen waehrend der Fahrt ------------------------------
+ *
+ * Statt einer Messung je Zug wird fortlaufend gemessen, sobald die
+ * Plattform diese Strecke seit der letzten Stuetzstelle zurueckgelegt hat.
+ * Kurz genug, dass sich die Kamera in der Zwischenzeit kaum dreht, lang
+ * genug fuer ein brauchbares Verhaeltnis von Signal zu Rauschen. */
+#ifndef ACE_TRACK_BASELINE_MM
+#define ACE_TRACK_BASELINE_MM 4.0
+#endif
+
+/* Streuung zwischen gefahrenem und im Bild gemessenem Weg, ab der auf eine
+ * unruhige Mechanik hingewiesen wird. */
+#ifndef ACE_DRIFT_WARN_MM
+#define ACE_DRIFT_WARN_MM 2.0
+#endif
+
+/* Drehgeschwindigkeit des Kamerawinkels, ab der das Kabel als ziehend
+ * gemeldet wird. */
+#ifndef ACE_ANGLE_RATE_WARN_DPS
+#define ACE_ANGLE_RATE_WARN_DPS 3.0
+#endif
+
 #endif

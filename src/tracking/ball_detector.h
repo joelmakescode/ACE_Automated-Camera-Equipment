@@ -51,6 +51,28 @@ typedef struct {
 
     void bd_set_view_mask(int enabled);
 
+    /* Fokus der Kamera. Vor bd_create_camera aufrufen, danach wirkungslos.
+     *
+     * Der Aufbau hat einen festen Abstand zur Flaeche, also gibt es fuer den
+     * Autofokus nichts zu gewinnen: er pumpt, und jedes Nachfokussieren
+     * bringt Unschaerfe und einen leicht anderen Massstab. Beides stoert die
+     * Erkennung und verfaelscht das Bildmodell der Verfolgung. Standard ist
+     * darum fester Fokus auf ACE_CAMERA_HEIGHT_MM.
+     *
+     * mode: "manual", "auto", "continuous" oder "default".
+     * lens_position in Dioptrien, also 1/Abstand in Metern. 400 mm sind 2.5.
+     * Nur bei "manual" wirksam. */
+    void bd_set_focus(const char *mode, double lens_position);
+
+    /* JPEG-Guete des Streams, 1..100. Der OpenCV-Standard 95 erzeugt bei
+     * 1280x720 rund 200 KB je Bild, also mehrere MB/s. */
+    void bd_set_stream_quality(int quality);
+
+    /* Bild vor dem Kodieren verkleinern, 0.1 bis 1.0. Halbe Kantenlaenge
+     * bedeutet ein Viertel der Datenmenge. Betrifft nur den Stream, nicht
+     * die Erkennung. */
+    void bd_set_stream_scale(double factor);
+
     int bd_save_annotated(BallDetector *detector, const DetectionResult *result, const char *out_path);
 
     int bd_stream_start(int port);

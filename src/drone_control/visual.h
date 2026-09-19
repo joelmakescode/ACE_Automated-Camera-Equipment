@@ -37,6 +37,27 @@ typedef struct {
     double last_residual_px;
     double last_expected_px;
     int    last_accepted;
+
+    /* Abstand Kamera zur Flaeche, zu dem der Massstab gehoert. Die Plattform
+     * haengt, also aendert sich dieser Abstand mit ihrer Hoehe, und der
+     * Massstab geht mit 1/Abstand. */
+    double ref_distance_mm;
+
+    /* Streuung zwischen gefahrenem und im Bild gemessenem Weg, in mm.
+     *
+     * Ein gleichbleibender Verlust ist hier nicht sichtbar: der Schaetzer
+     * zieht ihn in den Massstab, und der Regelkreis merkt nichts davon.
+     * Sichtbar ist allein das Zufaellige - also genau das, was eine
+     * rutschende Winde erzeugt. */
+    double drift_sq_sum;
+    double drift_worst_mm;
+    long   drift_count;
+
+    /* Drehgeschwindigkeit des Kamerawinkels in Grad je Sekunde. Zieht das
+     * Kabel waehrend der Fahrt, steht sie deutlich ueber null. */
+    double angle_rate_dps;
+    double last_angle_deg;
+    double last_update_s;
 } VisualModel;
 
 /* px_per_mm aus ACE_VIEW_WIDTH_MM und der Bildbreite, angle_deg als
@@ -60,6 +81,40 @@ void vis_predict(const VisualModel *m, double dx_mm, double dy_mm,
 int vis_update(VisualModel *m, double dx_mm, double dy_mm,
                double du_drop, double dv_drop,
                double gate_rel, double gate_px);
+
+/* Wie vis_update, aber mit Zeitstempel in Sekunden: daraus wird die
+ * Drehgeschwindigkeit des Kamerawinkels gebildet und die Streuung zwischen
+ * gefahrenem und gemessenem Weg fortgeschrieben. */
+int vis_update_at(VisualModel *m, double dx_mm, double dy_mm,
+                  double du_drop, double dv_drop,
+                  double gate_rel, double gate_px, double now_s);
+
+/* Eine Beobachtung mit absoluten Bildfehlern statt deren Differenz.
+ *
+ * Dreht sich die Kamera waehrend der Messung um d, so gilt
+ *
+ *     E_nachher = exp(i*d) * (E_vorher - a * Weg)
+ *
+ * Der Stoerterm ist also proportional zum Bildfehler selbst und waechst mit
+ * der Messdauer - genau wie das Nutzsignal. Kuerzere Strecken verbessern
+ * das Verhaeltnis darum nicht; sie liefern aber mehr Messungen und damit
+ * eine belastbare Streuung. Ein Herausrechnen von d aus der geschaetzten
+ * Drehrate wurde versucht und wieder verworfen, siehe visual.c. */
+int vis_observe(VisualModel *m, double dx_mm, double dy_mm,
+                double eu_before, double ev_before,
+                double eu_after,  double ev_after,
+                double gate_rel, double gate_px, double now_s);
+
+/* Abstand Kamera zur Flaeche melden. Aendert er sich, wird der Massstab
+ * mit dem Verhaeltnis der Abstaende nachgezogen, statt darauf zu warten,
+ * dass der Schaetzer es ueber mehrere Zuege nachholt. */
+void   vis_set_camera_distance(VisualModel *m, double distance_mm);
+double vis_camera_distance(const VisualModel *m);
+
+/* Streuung Koppelnavigation gegen Bild, in mm. */
+double vis_drift_rms_mm(const VisualModel *m);
+double vis_drift_worst_mm(const VisualModel *m);
+double vis_angle_rate_dps(const VisualModel *m);
 
 /* Vor einer Lernphase aufrufen. Die bisherige Messhistorie wird auf das
  * Gewicht der Startvermutung eingedampft, der aktuelle Schaetzwert bleibt

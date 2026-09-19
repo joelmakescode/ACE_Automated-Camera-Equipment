@@ -202,6 +202,19 @@ double kin_height_spread(const double lengths[ACE_MOTOR_COUNT],
     return hi - lo;
 }
 
+/* Laenge, die kin_plan dieser Winde an diesem Punkt vorschreibt, also
+ * einschliesslich Durchhang und Trimm. Nur gegen diesen Wert ist eine
+ * Abweichung aussagekraeftig: die Vorspannung einer schwachen Winde ist
+ * ein gewollter Unterschied, kein Fehler. */
+static double commanded_length(int motor, double x_mm, double y_mm,
+                               double height_mm) {
+    double from_centre = sqrt(x_mm * x_mm + y_mm * y_mm);
+    double slack       = ACE_SLACK_PER_100MM * from_centre / 100.0;
+
+    return kin_cable_length_at(motor, x_mm, y_mm, height_mm)
+         + slack + ACE_MOTOR_TRIM_MM[motor] + g_runtime_trim[motor];
+}
+
 double kin_length_residual(int motor, const long motor_steps[ACE_MOTOR_COUNT]) {
     if (motor < 0 || motor >= ACE_MOTOR_COUNT) return 0.0;
 
@@ -211,14 +224,28 @@ double kin_length_residual(int motor, const long motor_steps[ACE_MOTOR_COUNT]) {
     kin_lengths(motor_steps, lengths);
     kin_position_from_lengths(lengths, &x, &y);
 
-    return lengths[motor] - kin_cable_length(motor, x, y);
+    /* Mit der gemessenen Hoehe, nicht mit der Nennhoehe: 10 mm Hoehenfehler
+     * sind hier 3.6 mm Laengenfehler und damit ein glatter Fehlalarm. Die
+     * Hoehe stammt aus den vertrauenswuerdigen Winden, enthaelt diese also
+     * nicht. */
+    double h = kin_height(lengths, x, y);
+
+    return lengths[motor] - commanded_length(motor, x, y, h);
 }
 
 void kin_reset_motor(int motor, double x_mm, double y_mm,
                      const long motor_steps[ACE_MOTOR_COUNT]) {
     if (motor < 0 || motor >= ACE_MOTOR_COUNT) return;
 
-    g_reference_length[motor] = kin_cable_length(motor, x_mm, y_mm);
+    double lengths[ACE_MOTOR_COUNT];
+    double h = ACE_HOVER_HEIGHT_MM;
+
+    if (motor_steps) {
+        kin_lengths(motor_steps, lengths);
+        h = kin_height(lengths, x_mm, y_mm);
+    }
+
+    g_reference_length[motor] = commanded_length(motor, x_mm, y_mm, h);
     g_reference_steps[motor]  = motor_steps ? motor_steps[motor] : 0;
 }
 
