@@ -62,9 +62,10 @@ static int apply_tension(BallDetector *detector, const HsvRange *range,
                          double at_x_mm, double at_y_mm,
                          unsigned int step_delay_us) {
     long steps[ACE_MOTOR_COUNT];
-    long wind = lround(ACE_TENSION_MM / ACE_MM_PER_HALFSTEP);
 
-    for (int i = 0; i < ACE_MOTOR_COUNT; i++) steps[i] = wind;
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
+        steps[i] = lround(ACE_TENSION_MM / ACE_MM_PER_HALFSTEP_AT(i));
+    }
 
     if (motion_start(steps, step_delay_us) != 0) return -1;
     if (drain_until_idle(detector, range) != 0) return -1;
@@ -73,9 +74,11 @@ static int apply_tension(BallDetector *detector, const HsvRange *range,
     read_motors(motors);
     kin_reset(at_x_mm, at_y_mm, motors);
 
-    printf("Leichte Spannung: alle vier Seile %.1f mm aufgewickelt (%ld Halbschritte),\n"
+    printf("Leichte Spannung: alle vier Seile %.1f mm aufgewickelt "
+           "(%ld/%ld/%ld/%ld Halbschritte),\n"
            "Spulen bleiben bestromt, Position x=%.0f y=%.0f neu referenziert.\n",
-           ACE_TENSION_MM, wind, at_x_mm, at_y_mm);
+           ACE_TENSION_MM, steps[0], steps[1], steps[2], steps[3],
+           at_x_mm, at_y_mm);
     return 0;
 }
 

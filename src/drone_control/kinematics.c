@@ -47,7 +47,7 @@ void kin_reset(double x_mm, double y_mm, const long motor_steps[ACE_MOTOR_COUNT]
 
 static double current_length(int motor, const long motor_steps[ACE_MOTOR_COUNT]) {
     long wound = motor_steps[motor] - g_reference_steps[motor];
-    return g_reference_length[motor] - (double)wound * ACE_MM_PER_HALFSTEP;
+    return g_reference_length[motor] - (double)wound * ACE_MM_PER_HALFSTEP_AT(motor);
 }
 
 static double axis_position(int axis, double span,
@@ -92,7 +92,8 @@ void kin_plan(const long motor_steps[ACE_MOTOR_COUNT],
 
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
         double now    = current_length(i, motor_steps);
-        double wanted = kin_cable_length(i, target_x_mm, target_y_mm) + slack;
-        steps[i] = lround((now - wanted) / ACE_MM_PER_HALFSTEP);
+        double wanted = kin_cable_length(i, target_x_mm, target_y_mm)
+                      + slack + ACE_MOTOR_TRIM_MM[i];
+        steps[i] = lround((now - wanted) / ACE_MM_PER_HALFSTEP_AT(i));
     }
 }

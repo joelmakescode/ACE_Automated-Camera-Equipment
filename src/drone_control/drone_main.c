@@ -14,6 +14,7 @@
 #include "kinematics.h"
 #include "motion.h"
 #include "navigator.h"
+#include "pins.h"
 #include "stepper.h"
 
 static volatile sig_atomic_t g_abort = 0;
@@ -59,8 +60,11 @@ static void print_geometry(void) {
            ACE_HOVER_HEIGHT_MM, ACE_CAMERA_HEIGHT_MM);
     printf("Seil in Mitte  %.1f mm lang, %.1f Grad zur Waagerechten\n",
            kin_cable_length(0, 0.0, 0.0), cable_angle);
-    printf("Wickeldurchm.  %.1f mm  ->  %.4f mm pro Halbschritt\n",
-           ACE_DRUM_DIAMETER_MM, ACE_MM_PER_HALFSTEP);
+    for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
+        printf("Winde %d %-13s Wickel %.2f mm -> %.4f mm/Halbschritt, Trim %+.1f mm\n",
+               i, ACE_MOTOR_NAMES[i], ACE_MOTOR_DRUM_MM[i],
+               ACE_MM_PER_HALFSTEP_AT(i), ACE_MOTOR_TRIM_MM[i]);
+    }
     printf("Suchfahrt X    %.0f x %.0f mm\n",
            ACE_PATROL_SPAN_X_MM, ACE_PATROL_SPAN_Y_MM);
     printf("Fahrgrenze     x +/-%.0f mm, y +/-%.0f mm\n",

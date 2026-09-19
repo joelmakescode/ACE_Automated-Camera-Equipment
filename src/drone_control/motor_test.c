@@ -156,7 +156,13 @@ static int pattern_drum(long steps[ACE_MOTOR_COUNT], int motor, long count,
     printf("\nAbgewickeltes Seil messen, dann:\n");
     printf("  Wickeldurchmesser = gemessene Laenge in mm / (%.2f * 3.1416)\n", revs);
     printf("                    = gemessene Laenge in mm / %.3f\n", revs * ACE_PI);
-    printf("Der Wert gehoert als ACE_DRUM_DIAMETER_MM in geometry.h.\n");
+    printf("Weicht der Wert von den anderen Winden ab, gehoert er einzeln in\n");
+    printf("ACE_MOTOR_DRUM_LIST in geometry.h, Stelle %d (aktuell %.2f mm):\n",
+           motor, ACE_MOTOR_DRUM_MM[motor]);
+    printf("  #define ACE_MOTOR_DRUM_LIST { %.2f, %.2f, %.2f, %.2f }\n",
+           ACE_MOTOR_DRUM_MM[0], ACE_MOTOR_DRUM_MM[1],
+           ACE_MOTOR_DRUM_MM[2], ACE_MOTOR_DRUM_MM[3]);
+    printf("Gilt der Wert fuer alle vier, reicht ACE_DRUM_DIAMETER_MM.\n");
     printf("Wickelt der Motor auf statt ab, nochmal mit --dir ccw.\n");
     return 0;
 }

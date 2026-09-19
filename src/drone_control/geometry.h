@@ -30,6 +30,22 @@
 #define ACE_MM_PER_HALFSTEP \
     ((ACE_PI * ACE_DRUM_DIAMETER_MM) / (double)ACE_HALFSTEPS_PER_REV)
 
+#ifndef ACE_MOTOR_DRUM_LIST
+#define ACE_MOTOR_DRUM_LIST                             \
+    { ACE_DRUM_DIAMETER_MM, ACE_DRUM_DIAMETER_MM,       \
+      ACE_DRUM_DIAMETER_MM, ACE_DRUM_DIAMETER_MM }
+#endif
+
+#ifndef ACE_MOTOR_TRIM_LIST
+#define ACE_MOTOR_TRIM_LIST { 0.0, 0.0, 0.0, 0.0 }
+#endif
+
+static const double ACE_MOTOR_DRUM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_DRUM_LIST;
+static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
+
+#define ACE_MM_PER_HALFSTEP_AT(motor) \
+    ((ACE_PI * ACE_MOTOR_DRUM_MM[motor]) / (double)ACE_HALFSTEPS_PER_REV)
+
 #ifndef ACE_PATROL_SPAN_X_MM
 #define ACE_PATROL_SPAN_X_MM 300.0
 #endif
