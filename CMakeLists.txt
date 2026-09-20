@@ -31,8 +31,11 @@ endif()
 add_library(ace_vision STATIC
     src/tracking/ball_detector.cpp
 )
+# src/drone_control wegen geometry.h: dort steht der Arbeitsabstand, aus dem
+# sich die Fokuseinstellung ergibt. Nur Kopfdateien, kein Code.
 target_include_directories(ace_vision PUBLIC
     src/tracking
+    src/drone_control
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(ace_vision PUBLIC ${OpenCV_LIBS} Threads::Threads)

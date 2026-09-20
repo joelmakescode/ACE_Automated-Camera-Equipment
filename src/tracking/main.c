@@ -3,6 +3,7 @@
 #include <getopt.h>
 
 #include "ball_detector.h"
+#include "geometry.h"   /* nur fuer ACE_CAMERA_HEIGHT_MM */
 
 static void print_usage(const char *prog) {
     HsvRange def = bd_default_hsv_range();
@@ -19,13 +20,23 @@ static void print_usage(const char *prog) {
         "           dafuer mittig vor die Kamera halten.\n"
         "  --mask   zeigt in --stream und --save-frame die Maske statt des\n"
         "           Bildes: weiss ist, was der Bereich gerade durchlaesst.\n"
+        "  --lens N Linsenposition in Dioptrien, also 1/Abstand[m].\n"
+        "           Standard %.2f, passend zu %.0f mm aus geometry.h.\n"
+        "           Fuer eine Fokusreihe mehrere Werte durchprobieren.\n"
+        "  --focus  manual, continuous, auto oder default. Standard manual:\n"
+        "           der Abstand steht fest, ein pumpender Autofokus bringt\n"
+        "           nur Unschaerfe und einen wandernden Massstab.\n"
+        "  --jpeg Q Guete des Streams 1..100, Standard 90. Zum Beurteilen\n"
+        "           der Schaerfe hoch setzen, nicht herunter.\n"
         "\n"
         "Farbe: Standard ist Rot auf hellem Grund, h %d-%d s %d-%d v %d-%d.\n"
         "       Ist h-min groesser als h-max, wird ueber den Nullpunkt hinweg\n"
         "       gesucht, also h-min..179 und 0..h-max. Genau so wird Rot\n"
         "       erfasst, das an beiden Enden der Hue-Skala liegt.\n"
         "       Mit --stream laesst sich der Bereich am Livebild pruefen.\n",
-        prog, def.h_min, def.h_max, def.s_min, def.s_max, def.v_min, def.v_max);
+        prog,
+        1000.0 / ACE_CAMERA_HEIGHT_MM, (double)ACE_CAMERA_HEIGHT_MM,
+        def.h_min, def.h_max, def.s_min, def.s_max, def.v_min, def.v_max);
 }
 
 static const char *channel_hint(const PatchStats *p) {
@@ -110,6 +121,9 @@ int main(int argc, char **argv) {
     int stream_enabled = 0;
     int stream_port = 8080;
     int probe = 0;
+    const char *focus_mode = "manual";
+    double lens_position = 1000.0 / ACE_CAMERA_HEIGHT_MM;
+    int jpeg_quality = 90;
     int view_mask = 0;
 
     HsvRange range = bd_default_hsv_range();
@@ -122,6 +136,9 @@ int main(int argc, char **argv) {
         {"frames",     required_argument, 0, 'f'},
         {"save-frame", required_argument, 0, 's'},
         {"stream",     optional_argument, 0, 't'},
+        {"focus",      required_argument, 0, 'F'},
+        {"lens",       required_argument, 0, 'L'},
+        {"jpeg",       required_argument, 0, 'J'},
         {"probe",      no_argument,       0, 'p'},
         {"mask",       no_argument,       0, 'm'},
         {"h-min",      required_argument, 0, 1},
@@ -135,13 +152,16 @@ int main(int argc, char **argv) {
     };
 
     int opt, opt_index = 0;
-    while ((opt = getopt_long(argc, argv, "d:i:w:h:f:s:t::pm", long_opts, &opt_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:i:w:h:f:s:t::pmF:L:J:", long_opts, &opt_index)) != -1) {
         switch (opt) {
             case 'd': device = optarg; break;
             case 'i': image_path = optarg; break;
             case 'w': width = atoi(optarg); break;
             case 'h': height = atoi(optarg); break;
             case 'f': frames = atol(optarg); break;
+            case 'F': focus_mode    = optarg; break;
+            case 'L': lens_position = atof(optarg); break;
+            case 'J': jpeg_quality  = atoi(optarg); break;
             case 'p': probe = 1; break;
             case 'm': view_mask = 1; break;
             case 's': save_frame_path = optarg; break;
@@ -161,6 +181,10 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Vor bd_create_camera: der Fokus geht in die Kommandozeile von
+     * rpicam-vid ein. Fester Abstand, also fester Fokus. */
+    bd_set_focus(focus_mode, lens_position);
+
     BallDetector *detector = image_path
         ? bd_create_from_image(image_path)
         : bd_create_camera(device, width, height);
@@ -171,6 +195,7 @@ int main(int argc, char **argv) {
     }
 
     if (view_mask) bd_set_view_mask(1);
+    bd_set_stream_quality(jpeg_quality);
 
     if (stream_enabled) {
         if (bd_stream_start(stream_port) != 0) {

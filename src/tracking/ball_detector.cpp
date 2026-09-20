@@ -1,5 +1,9 @@
 #include "ball_detector.h"
 
+/* Nur fuer ACE_CAMERA_HEIGHT_MM: der Arbeitsabstand steht dort und soll
+ * nicht an zwei Stellen gepflegt werden. */
+#include "geometry.h"
+
 #include <opencv2/opencv.hpp>
 #if CV_VERSION_MAJOR >= 5
 /* OpenCV 5 verschob contourArea/minEnclosingCircle aus imgproc.hpp hierher;
@@ -43,9 +47,15 @@ extern "C" HsvRange bd_default_hsv_range(void) {
 }
 
 /* Fokus: fest auf den Arbeitsabstand, nicht automatisch. Siehe Kommentar an
- * bd_set_focus in der Kopfdatei. */
+ * bd_set_focus in der Kopfdatei.
+ *
+ * Der Abstand kommt aus ACE_CAMERA_HEIGHT_MM und wird hier nicht noch
+ * einmal hingeschrieben. Genau diese Doppelung war der Fehler: als der
+ * Aufbau von 40 auf 30 cm wechselte, zog die Geometrie mit, dieser Wert
+ * aber nicht - und jedes Programm, das bd_set_focus nicht ruft, stellte
+ * weiter auf 40 cm scharf. */
 static std::string g_focus_mode     = "manual";
-static double      g_lens_position  = 2.5;   /* Dioptrien, 1/0.4 m */
+static double      g_lens_position  = 1000.0 / ACE_CAMERA_HEIGHT_MM;
 
 extern "C" void bd_set_focus(const char *mode, double lens_position) {
     if (mode && *mode) g_focus_mode = mode;
