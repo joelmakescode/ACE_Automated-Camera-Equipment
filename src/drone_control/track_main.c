@@ -144,6 +144,12 @@ typedef struct {
     double prev_err_px;         /* fuer den Waechter, ueber Zuege hinweg */
     int    stall;
     int    lost_run;
+
+    /* Suchfahrt. */
+    int    search_on;
+    int    search_index;
+    int    search_laps;
+    int    searches_hit;
 } Tracker;
 
 /* Lage des Objekts relativ zur Bildmitte, gemittelt ueber mehrere Treffer.
@@ -354,6 +360,8 @@ static void sync_scale_to_height(Tracker *t) {
     }
 }
 
+typedef enum { DRIVE_PLAIN, DRIVE_TRACK, DRIVE_SEARCH } DriveMode;
+
 /* Fahrt abwarten und dabei weiter Bilder holen: das haelt die Kamerapipe
  * leer und liefert nebenbei die laufenden Messungen.
  *
@@ -369,16 +377,31 @@ static void sync_scale_to_height(Tracker *t) {
  *     gelaufen, der geplante Weg zeigt in die falsche Richtung.
  *
  * Rueckgabe: 0 durchgefahren, 1 Abbruch durch den Nutzer, 2 vorzeitig
- * beendet (neu planen), -1 Kamerafehler. */
-static int drive_and_drain(Tracker *t, double start_err_px) {
+ * beendet (neu planen bzw. Objekt gefunden), -1 Kamerafehler. */
+static int drive_and_drain(Tracker *t, DriveMode mode, double start_err_px) {
     int    have_anchor = 0;
     double ax = 0.0, ay = 0.0, aeu = 0.0, aev = 0.0;
     int    early = 0;
+    int    seen_run = 0;
 
     while (path_busy() && !g_abort) {
         DetectionResult seen;
         if (bd_detect(t->cam, &t->range, &seen) != 0) return -1;
         if (t->stream_on) bd_stream_push(t->cam, &seen);
+
+        /* Waehrend der Suchfahrt zaehlt jedes Bild, nicht nur die
+         * Wegpunkte - sonst rauschte die Plattform an einem Objekt vorbei,
+         * das sie zwischendurch laengst im Bild hatte. Mehrere Treffer in
+         * Folge, damit ein einzelnes Rauschpixel die Suche nicht abbricht. */
+        if (mode == DRIVE_SEARCH) {
+            seen_run = seen.found ? seen_run + 1 : 0;
+            if (seen_run >= ACE_SEARCH_CONFIRM) {
+                path_abort();
+                early = 2;
+                break;
+            }
+        }
+
         if (!seen.found) continue;
 
         long   steps[ACE_MOTOR_COUNT];
@@ -389,7 +412,7 @@ static int drive_and_drain(Tracker *t, double start_err_px) {
         double eu = seen.x - t->width  / 2.0;
         double ev = seen.y - t->height / 2.0;
 
-        if (start_err_px > 0.0) {
+        if (mode == DRIVE_TRACK && start_err_px > 0.0) {
             double err = sqrt(eu * eu + ev * ev);
             if (err <= t->tolerance_px ||
                 err >  start_err_px * ACE_TRACK_ABORT_GROW) {
@@ -504,7 +527,7 @@ static int learn(Tracker *t) {
         kin_clamp(&tx, &ty);
 
         if (path_start(tx, ty, t->delay_us) != 0) return -1;
-        if (drive_and_drain(t, -1.0) != 0) return -1;
+        if (drive_and_drain(t, DRIVE_PLAIN, 0.0) != 0) return -1;
 
         m = measure(t, &eu1, &ev1, NULL);
         if (m != 0) {
@@ -563,6 +586,9 @@ static int learn(Tracker *t) {
 
 /* ------------------------------------------------------------- Regelung */
 
+/* Die Suchfahrt steht weiter unten, wird aber schon im Regelzug gebraucht. */
+static int search_tick(Tracker *t);
+
 /* Ein Regelzug: messen, entscheiden, fahren, nachmessen.
  *
  * Frueher war das eine Endlosschleife. Jetzt ist es ein einzelner Zug, weil
@@ -575,14 +601,26 @@ static int track_cycle(Tracker *t) {
     int m = measure(t, &eu, &ev, &radius);
     if (m < 0) return -1;
     if (m > 0) {
-        /* Ohne Objekt wird nicht geraten. Stehenbleiben ist hier die
-         * sichere Antwort, erst recht mit einer Winde, die rutscht. */
-        if (t->lost_run == 0) {
-            printf("\nObjekt nicht im Bild, Plattform bleibt stehen.\n");
-        }
-        t->lost_run++;
         t->lost++;
-        return 0;
+        t->lost_run++;
+
+        if (!t->search_on) {
+            if (t->lost_run == 1) {
+                printf("\nObjekt nicht im Bild, Plattform bleibt stehen.\n");
+            }
+            return 0;
+        }
+
+        /* Erst ein paar Durchgaenge abwarten. Eine kurze Verdeckung - eine
+         * Hand, ein Schatten - soll die Plattform nicht gleich quer ueber
+         * das Feld schicken. Ein Durchgang ohne Fund dauert schon rund
+         * zweieinhalb Sekunden, weil measure so lange nach Treffern sucht. */
+        if (t->lost_run < ACE_SEARCH_AFTER_LOST) return 0;
+
+        if (t->lost_run == ACE_SEARCH_AFTER_LOST) {
+            printf("\nObjekt nicht im Bild, Suchfahrt beginnt.\n");
+        }
+        return search_tick(t);
     }
     if (t->lost_run > 0) {
         printf("Objekt wieder da.\n");
@@ -688,7 +726,7 @@ static int track_cycle(Tracker *t) {
     }
 
     if (path_start(tx, ty, t->delay_us) != 0) return -1;
-    int r = drive_and_drain(t, err);
+    int r = drive_and_drain(t, DRIVE_TRACK, err);
     if (r < 0) return -1;
     if (r == 1) return 0;       /* Ctrl-C, die aeussere Schleife bricht ab */
     /* r == 2 heisst nur: unterwegs abgebrochen, weil das Bild es verlangte.
@@ -706,6 +744,72 @@ static int track_cycle(Tracker *t) {
 
     check_slip(t);
     t->prev_err_px = err;
+    return 0;
+}
+
+/* ------------------------------------------------------------ Suchfahrt */
+
+/* Wegpunkt der Suchfahrt: Schlangenlinie ueber den Fahrbereich.
+ *
+ * Das Sichtfeld ist mit 210 x 118 mm klein gegen die 440 x 340 mm, die die
+ * Plattform erreicht - ein Blick von einer Stelle aus reicht also bei
+ * weitem nicht. Drei Spalten mal vier Zeilen ist das kleinste Raster, bei
+ * dem sich die Ausschnitte noch ueberlappen: 180 mm Spaltenabstand gegen
+ * 210 mm Sichtbreite, 100 mm Zeilenabstand gegen 118 mm Sichthoehe. Die
+ * Aussenpunkte liegen so, dass ihr halbes Sichtfeld ueber den Rand des
+ * Fahrbereichs hinausreicht.
+ *
+ * Jede zweite Spalte wird rueckwaerts abgefahren, damit keine Leerfahrt
+ * quer ueber das ganze Feld noetig wird. */
+static void search_point(int idx, double *x_mm, double *y_mm) {
+    const int cols = ACE_SEARCH_COLS;
+    const int rows = ACE_SEARCH_ROWS;
+    const int n    = cols * rows;
+
+    idx = ((idx % n) + n) % n;
+
+    int col = idx / rows;
+    int row = idx % rows;
+    if (col & 1) row = rows - 1 - row;      /* Schlangenlinie */
+
+    double sx = (cols > 1) ? (2.0 * ACE_SEARCH_X_MM / (cols - 1)) : 0.0;
+    double sy = (rows > 1) ? (2.0 * ACE_SEARCH_Y_MM / (rows - 1)) : 0.0;
+
+    *x_mm = (cols > 1) ? (-ACE_SEARCH_X_MM + col * sx) : 0.0;
+    *y_mm = (rows > 1) ? (-ACE_SEARCH_Y_MM + row * sy) : 0.0;
+}
+
+/* Einen Abschnitt der Suchfahrt abfahren. Bricht ab, sobald das Objekt
+ * auftaucht - der naechste Regelzug findet es dann von selbst. */
+static int search_tick(Tracker *t) {
+    double sx, sy;
+    search_point(t->search_index, &sx, &sy);
+    kin_clamp(&sx, &sy);
+
+    if (!t->quiet) {
+        printf("\rSuchfahrt %2d/%-2d  ->  %+6.1f,%+6.1f mm            ",
+               (t->search_index % (ACE_SEARCH_COLS * ACE_SEARCH_ROWS)) + 1,
+               ACE_SEARCH_COLS * ACE_SEARCH_ROWS, sx, sy);
+        fflush(stdout);
+    }
+
+    if (path_start(sx, sy, t->delay_us) != 0) return -1;
+
+    int r = drive_and_drain(t, DRIVE_SEARCH, 0.0);
+    if (r < 0) return -1;
+    if (r == 1) return 0;                   /* Ctrl-C */
+
+    if (r == 2) {
+        printf("\nObjekt gefunden, Suchfahrt beendet.\n");
+        t->searches_hit++;
+        return 0;                           /* Wegpunkt beibehalten */
+    }
+
+    t->search_index++;
+    if (t->search_index % (ACE_SEARCH_COLS * ACE_SEARCH_ROWS) == 0) {
+        t->search_laps++;
+        printf("\nSuchfahrt: Feld einmal abgesucht, nichts gefunden.\n");
+    }
     return 0;
 }
 
@@ -732,8 +836,11 @@ static void update_status(Tracker *t) {
     motion_positions(steps);
     kin_pose(steps, &x, &y, &h);
 
-    const char *mode = t->tracking ? "verfolgt"
-                     : (t->learned ? "wartet" : "wartet, noch nicht eingemessen");
+    const char *mode =
+        !t->tracking ? (t->learned ? "wartet" : "wartet, noch nicht eingemessen")
+      : (t->lost_run >= ACE_SEARCH_AFTER_LOST && t->search_on) ? "Suchfahrt"
+      : t->lost_run > 0 ? "Objekt verloren"
+      : "verfolgt";
 
     char buf[900];
     snprintf(buf, sizeof(buf),
@@ -743,6 +850,7 @@ static void update_status(Tracker *t) {
         "Kippen       %+.2f Grad im eingeschlossenen Winkel%s\n"
         "Bodenlinien  Winkel %ld x   Massstab %ld x   Lage %ld x\n"
         "Zuege        %ld   ohne Objekt %d   neu gelernt %d\n"
+        "Suchfahrt    %s   Punkt %d/%d   Durchlaeufe %d   Funde %d\n"
         "Streuung     %.2f mm RMS   Kamera dreht %+.2f Grad/s\n",
         mode,
         x, y, h,
@@ -750,6 +858,9 @@ static void update_status(Tracker *t) {
         t->bias_stale ? "  (Versatz veraltet, Lagefix aus)" : "",
         t->fix_angle, t->fix_scale, t->fix_position,
         t->cycles, t->lost, t->relearns,
+        t->search_on ? "ein" : "aus",
+        (t->search_index % (ACE_SEARCH_COLS * ACE_SEARCH_ROWS)) + 1,
+        ACE_SEARCH_COLS * ACE_SEARCH_ROWS, t->search_laps, t->searches_hit,
         vis_drift_rms_mm(&t->vis), vis_angle_rate_dps(&t->vis));
 
     bd_stream_set_status(buf);
@@ -768,7 +879,7 @@ static int jog(Tracker *t, double dx, double dy) {
     printf("\nHandfahrt %+.0f,%+.0f mm  ->  %+.1f,%+.1f\n", dx, dy, tx, ty);
     if (path_start(tx, ty, t->delay_us) != 0) return -1;
 
-    int r = drive_and_drain(t, -1.0);
+    int r = drive_and_drain(t, DRIVE_PLAIN, 0.0);
     return (r < 0) ? -1 : 0;
 }
 
@@ -1076,6 +1187,10 @@ int main(int argc, char **argv) {
     t.prev_err_px  = -1.0;
     t.stall        = 0;
     t.lost_run     = 0;
+    t.search_on    = 1;
+    t.search_index = 0;
+    t.search_laps  = 0;
+    t.searches_hit = 0;
     floor_default_lines(t.lines);
     t.weak         = ACE_WEAK_MOTOR;
     t.slip_total_mm = 0.0;
@@ -1101,6 +1216,7 @@ int main(int argc, char **argv) {
         {"preload",     required_argument, 0, 'P'},
         {"no-learn",    no_argument,       0, 'L'},
         {"no-lines",    no_argument,       0, 'N'},
+        {"no-search",   no_argument,       0, 'X'},
         {"gain",        required_argument, 0, 'g'},
         {"tolerance",   required_argument, 0, 'e'},
         {"max-step",    required_argument, 0, 'M'},
@@ -1128,7 +1244,7 @@ int main(int argc, char **argv) {
 
     int opt, oi = 0;
     while ((opt = getopt_long(argc, argv,
-                              "d:w:H:t::W:P:LNg:e:M:b:u:c:T:S:a:nqf:l:j:z:",
+                              "d:w:H:t::W:P:LNXg:e:M:b:u:c:T:S:a:nqf:l:j:z:",
                               lo, &oi)) != -1) {
         switch (opt) {
             case 'f': focus_mode     = optarg; break;
@@ -1142,6 +1258,7 @@ int main(int argc, char **argv) {
             case 'P': preload_mm     = atof(optarg); break;
             case 'L': do_learn       = 0; break;
             case 'N': t.use_lines    = 0; break;
+            case 'X': t.search_on    = 0; break;
             case 'g': t.gain         = atof(optarg); break;
             case 'e': t.tolerance_px = atof(optarg); break;
             case 'M': t.max_step_mm  = atof(optarg); break;

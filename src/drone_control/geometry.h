@@ -431,4 +431,40 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_TRACK_ABORT_GROW 1.6
 #endif
 
+/* ---- Suchfahrt --------------------------------------------------------
+ *
+ * Verschwindet das Objekt, faehrt die Plattform das Feld in einer
+ * Schlangenlinie ab. Das Raster ist so gewaehlt, dass sich die
+ * Kameraausschnitte ueberlappen: bei 210 x 118 mm Sichtfeld sind 180 mm
+ * Spaltenabstand und 100 mm Zeilenabstand die groebste Teilung ohne Luecke.
+ * Ein voller Durchlauf misst 1260 mm und dauert bei 6.1 mm/s gut drei
+ * Minuten - das ist die Mechanik, nicht die Rechnung. */
+#ifndef ACE_SEARCH_COLS
+#define ACE_SEARCH_COLS 3
+#endif
+#ifndef ACE_SEARCH_ROWS
+#define ACE_SEARCH_ROWS 4
+#endif
+
+/* Aeusserste Wegpunkte. Ihr halbes Sichtfeld reicht ueber den Rand des
+ * Fahrbereichs hinaus, damit auch dort nichts uebersehen wird. */
+#ifndef ACE_SEARCH_X_MM
+#define ACE_SEARCH_X_MM 180.0
+#endif
+#ifndef ACE_SEARCH_Y_MM
+#define ACE_SEARCH_Y_MM 150.0
+#endif
+
+/* Durchgaenge ohne Objekt, bevor die Suche anlaeuft. Einer dauert schon
+ * rund zweieinhalb Sekunden - genug Nachsicht fuer eine kurze Verdeckung. */
+#ifndef ACE_SEARCH_AFTER_LOST
+#define ACE_SEARCH_AFTER_LOST 2
+#endif
+
+/* Treffer in Folge, bevor die Suchfahrt abbricht. Ein einzelnes
+ * Rauschpixel soll sie nicht beenden. */
+#ifndef ACE_SEARCH_CONFIRM
+#define ACE_SEARCH_CONFIRM 3
+#endif
+
 #endif
