@@ -438,11 +438,11 @@ static double measure_dash(const std::vector<cv::Point> &pts,
      * Mittenbestimmung ueber die ganze Strecke, statt ihn wie beim Median
      * einzelner Abstaende voll stehen zu lassen - bei nur drei oder vier
      * Strichen macht das den Unterschied. */
-    double span = centres.back() - centres.front();
-    double n    = floor(span / mid + 0.5);
+    double span    = centres.back() - centres.front();
+    double periods = std::floor(span / mid + 0.5);
 
-    if (n >= 1.0) {
-        double period = span / n;
+    if (periods >= 1.0) {
+        double period = span / periods;
         /* Nur nehmen, wenn die Zaehlung plausibel ist. Lag der grobe
          * Median daneben, stimmt auch die Anzahl nicht. */
         if (period > 0.75 * mid && period < 1.25 * mid) return period;
