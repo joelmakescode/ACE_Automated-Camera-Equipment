@@ -77,16 +77,17 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 
 /* Breite des Sichtfelds auf dem Brett, in mm.
  *
- * NUR EIN STARTWERT. 400 mm auf 300 mm Abstand entsprechen 68 Grad
- * Blickwinkel, was fuer das Arducam-Modul plausibel ist - gemessen ist es
- * nicht. Der richtige Wert kommt aus dem Betrieb: die Strichteilung der
- * Bodenlinien liefert px/mm unmittelbar, und ace_track gibt die daraus
- * folgende Sichtbreite im Schlussbericht aus. Diesen Wert hier eintragen.
+ * Am Aufbau gemessen: mit dem Lineal auf dem Brett rund 210 mm ueber die
+ * volle Bildbreite. Gegengeprueft an der Strichteilung - 50 mm ergeben bei
+ * diesem Massstab 305 px, gemessen wurden rund 300, das entspraeche 213 mm.
+ * Beide Wege stimmen auf anderthalb Prozent ueberein.
  *
- * Grob daneben schadet wenig: der Regelkreis bleibt stabil, solange der
- * Startwert nicht um mehr als das Dreifache zu gross ist. */
+ * Das sind 38.6 Grad Blickwinkel und damit deutlich weniger, als das Modul
+ * optisch koennte. rpicam-vid nimmt bei 1280x720 offenbar einen Ausschnitt
+ * des Sensors statt das volle Feld zu binnen. Wer mehr Flaeche sehen will,
+ * muesste den Sensormodus erzwingen; noetig ist es nicht. */
 #ifndef ACE_VIEW_WIDTH_MM
-#define ACE_VIEW_WIDTH_MM 400.0
+#define ACE_VIEW_WIDTH_MM 210.0
 #endif
 
 #ifndef ACE_CENTER_TOLERANCE_PX
@@ -393,6 +394,26 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
  * Messung langfristig die richtige. */
 #ifndef ACE_FIX_BLEND
 #define ACE_FIX_BLEND 0.25
+#endif
+
+/* Bandbreite in mm. Bei 3 mm und 3.2 px/mm sind das rund 10 Pixel im Bild -
+ * schmal genug, dass eine morphologische Oeffnung die Linie aufreissen
+ * wuerde. bd_detect_line filtert darum ueber die Flaeche zusammenhaengender
+ * Gebiete statt ueber eine Oeffnung. */
+#ifndef ACE_LINE_WIDTH_MM
+#define ACE_LINE_WIDTH_MM 3.5
+#endif
+
+/* Kleinste Flaeche in Pixeln, die als Teil einer Linie durchgeht; alles
+ * darunter ist Sprenkel. Bei der gemessenen Sichtbreite sind das 6.1 px/mm,
+ * ein ganzer Strich von 25 x 3.5 mm bringt also rund 3250 Pixel mit und ein
+ * Millimeter Linienlaenge noch 130. 150 wirft Rauschen weg und laesst auch
+ * kurze Bruchstuecke stehen, die zum Verschmelzen gebraucht werden.
+ *
+ * Haengt am Massstab: aendert sich ACE_VIEW_WIDTH_MM deutlich, muss dieser
+ * Wert quadratisch mitziehen. */
+#ifndef ACE_LINE_MIN_BLOB_PX
+#define ACE_LINE_MIN_BLOB_PX 150
 #endif
 
 #endif

@@ -92,8 +92,19 @@ void floor_solve(const FloorLine lines[2], const LineResult seen[2],
         }
     }
     if (n > 0) {
-        out->px_per_mm  = sum / n;
-        out->have_scale = true;
+        double measured = sum / n;
+
+        /* Grobe Fehlmessung abweisen. Reisst jeder Strich auf, halbiert
+         * sich die gemessene Teilung; faellt jeder zweite ganz aus,
+         * verdoppelt sie sich. Beides wuerde als Massstab durchgehen und
+         * die Lage im selben Verhaeltnis verziehen. Die bisherige
+         * Schaetzung ist der Massstab, gegen den das geprueft wird - sie
+         * darf falsch sein, aber nicht um Faktor zwei. */
+        if (scale_hint <= 1e-6 ||
+            (measured > 0.5 * scale_hint && measured < 2.0 * scale_hint)) {
+            out->px_per_mm  = measured;
+            out->have_scale = true;
+        }
     }
 
     double scale = out->have_scale ? out->px_per_mm : scale_hint;

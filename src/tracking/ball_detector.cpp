@@ -358,21 +358,104 @@ static double measure_dash(const std::vector<cv::Point> &pts,
         if (i >= 0 && i < n) occ[static_cast<size_t>(i)]++;
     }
 
-    std::vector<double> centres;
-    for (int i = 0; i < n; ) {
-        if (!occ[static_cast<size_t>(i)]) { i++; continue; }
-        int start = i;
-        while (i < n && occ[static_cast<size_t>(i)]) i++;
-        centres.push_back((start + i - 1) / 2.0);
-    }
-    if (centres.size() < 4) return 0.0;      /* zu wenige Striche im Bild */
+    /* Die belegten Abschnitte mit Anfang und Ende merken, nicht nur ihre
+     * Mitte: zum Verschmelzen von Bruchstuecken wird die Ausdehnung
+     * gebraucht. */
+    /* Ein einzelnes Pixel darf einen Abschnitt nicht als belegt gelten
+     * lassen. Bei einer schmalen, ausgefransten Linie wuerden Streupixel
+     * sonst die Luecken zwischen den Strichen ueberbruecken, alles waere
+     * ein einziger Abschnitt und der Massstab fiele aus. Die Schwelle
+     * richtet sich nach der tatsaechlichen Linienbreite: ein Viertel der
+     * dicksten Stelle. */
+    int peak = 0;
+    for (int v : occ) if (v > peak) peak = v;
+    int on = peak / 4;
+    if (on < 1) on = 1;
 
-    std::vector<double> gaps;
-    for (size_t k = 1; k < centres.size(); k++) {
-        gaps.push_back(centres[k] - centres[k - 1]);
+    std::vector<std::pair<double, double>> runs;
+    for (int i = 0; i < n; ) {
+        if (occ[static_cast<size_t>(i)] < on) { i++; continue; }
+        int start = i;
+        while (i < n && occ[static_cast<size_t>(i)] >= on) i++;
+        runs.push_back({ static_cast<double>(start),
+                         static_cast<double>(i - 1) });
     }
-    std::sort(gaps.begin(), gaps.end());
-    return gaps[gaps.size() / 2];
+    /* Drei Abschnitte genuegen. Bei 50 mm Teilung und diesem Massstab
+     * passen nur gut vier Striche ins Bild; verlangte man vier, liesse ein
+     * einziger Riss an der Kreuzung die Messung ausfallen. */
+    if (runs.size() < 3) return 0.0;
+
+    auto centre_of = [](const std::pair<double, double> &r) {
+        return 0.5 * (r.first + r.second);
+    };
+
+    /* Erste, grobe Schaetzung ueber den Median der Mittenabstaende. */
+    std::vector<double> d0;
+    for (size_t k = 1; k < runs.size(); k++) {
+        d0.push_back(centre_of(runs[k]) - centre_of(runs[k - 1]));
+    }
+    std::sort(d0.begin(), d0.end());
+    double rough = d0[d0.size() / 2];
+    if (rough < 4.0) return 0.0;
+
+    /* Bruchstuecke verschmelzen.
+     *
+     * Ein Strich kann aufreissen: durch die Kreuzung der beiden Baender,
+     * durch Staub, einen Kratzer oder den Schatten der Plattform. Dann
+     * liefert er zwei Abschnitte statt einem, und der Median der
+     * Mittenabstaende rutscht ab - bei wenigen Strichen um ueber zehn
+     * Prozent, was voll in die Lage durchschlaegt. Was deutlich enger
+     * beieinander liegt als die grobe Teilung, gehoert zu einem Strich. */
+    std::vector<double> centres;
+    for (size_t i = 0; i < runs.size(); ) {
+        double lo = runs[i].first;
+        double hi = runs[i].second;
+
+        size_t j = i + 1;
+        while (j < runs.size() &&
+               centre_of(runs[j]) - centre_of(runs[j - 1]) < 0.55 * rough) {
+            hi = runs[j].second;
+            j++;
+        }
+        centres.push_back(0.5 * (lo + hi));
+        i = j;
+    }
+    if (centres.size() < 3) return 0.0;
+
+    std::vector<double> d1;
+    for (size_t k = 1; k < centres.size(); k++) {
+        d1.push_back(centres[k] - centres[k - 1]);
+    }
+    std::sort(d1.begin(), d1.end());
+    double mid = d1[d1.size() / 2];
+    if (mid < 4.0) return 0.0;
+
+    /* Ueber die volle Strecke messen statt ueber Nachbarabstaende.
+     *
+     * Der Abstand vom ersten zum letzten Strich enthaelt eine ganze Zahl
+     * von Teilungen. Wieviele es sind, sagt der grobe Median; die Teilung
+     * selbst folgt dann aus der Division. Das mittelt den Fehler der
+     * Mittenbestimmung ueber die ganze Strecke, statt ihn wie beim Median
+     * einzelner Abstaende voll stehen zu lassen - bei nur drei oder vier
+     * Strichen macht das den Unterschied. */
+    double span = centres.back() - centres.front();
+    double n    = floor(span / mid + 0.5);
+
+    if (n >= 1.0) {
+        double period = span / n;
+        /* Nur nehmen, wenn die Zaehlung plausibel ist. Lag der grobe
+         * Median daneben, stimmt auch die Anzahl nicht. */
+        if (period > 0.75 * mid && period < 1.25 * mid) return period;
+    }
+
+    /* Rueckfall: getrimmtes Mittel ueber die Nachbarabstaende. Ein ganz
+     * fehlender Strich erzeugt den doppelten Abstand und faellt heraus. */
+    double sum  = 0.0;
+    int    kept = 0;
+    for (double d : d1) {
+        if (d > 0.6 * mid && d < 1.4 * mid) { sum += d; kept++; }
+    }
+    return (kept >= 2) ? sum / kept : mid;
 }
 
 extern "C" int bd_detect_line(BallDetector *bd, const HsvRange *range,
@@ -404,10 +487,34 @@ extern "C" int bd_detect_line(BallDetector *bd, const HsvRange *range,
         cv::bitwise_or(lo, hi, mask);
     }
 
-    /* Nur oeffnen, nicht schliessen: die Luecken der Strichlinie werden
-     * fuer den Massstab gebraucht und duerfen nicht zugebuegelt werden. */
-    cv::Mat k = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-    cv::morphologyEx(mask, mask, cv::MORPH_OPEN, k);
+    /* Rauschen ueber die Flaeche zusammenhaengender Gebiete abwerfen, nicht
+     * ueber eine morphologische Oeffnung.
+     *
+     * Eine Oeffnung mit 3x3 nimmt ringsum ein Pixel weg. Bei einem 3 mm
+     * breiten Band sind das rund 10 Pixel im Bild, und wenn die Farbe blass
+     * ist, faellt der Rand ohnehin schon unter die Saettigungsschwelle -
+     * die erkannte Spur ist dann schmaler als das Band. Zwei Pixel weniger
+     * reissen sie auseinander, und ein aufgerissener Strich verdirbt die
+     * Teilungsmessung. Der Flaechenfilter wirft Sprenkel genauso weg, laesst
+     * die Linie aber in voller Breite stehen, und er erwischt zusaetzlich
+     * groessere Streuflecken, an denen eine Oeffnung scheitert. */
+    {
+        cv::Mat labels, stats, centroids;
+        int nlab = cv::connectedComponentsWithStats(mask, labels, stats,
+                                                    centroids, 8, CV_32S);
+        std::vector<unsigned char> keep(static_cast<size_t>(nlab), 0);
+        for (int l = 1; l < nlab; l++) {
+            keep[static_cast<size_t>(l)] =
+                stats.at<int>(l, cv::CC_STAT_AREA) >= ACE_LINE_MIN_BLOB_PX;
+        }
+        for (int y = 0; y < mask.rows; y++) {
+            const int *lr = labels.ptr<int>(y);
+            unsigned char *mr = mask.ptr<unsigned char>(y);
+            for (int x = 0; x < mask.cols; x++) {
+                if (mr[x] && !keep[static_cast<size_t>(lr[x])]) mr[x] = 0;
+            }
+        }
+    }
 
     std::vector<cv::Point> pts;
     cv::findNonZero(mask, pts);
