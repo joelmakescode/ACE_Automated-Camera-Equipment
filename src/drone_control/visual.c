@@ -218,6 +218,38 @@ int vis_update_at(VisualModel *m, double dx_mm, double dy_mm,
     return 1;
 }
 
+/* Beide Setzer lassen die aufgelaufene Messhistorie stehen, ziehen sie aber
+ * auf den neuen Wert mit. Sonst wuerde der Schaetzer die gemessene Groesse
+ * mit der naechsten Beobachtung wieder wegmitteln. */
+static void reanchor(VisualModel *m, double new_re, double new_im) {
+    double w = m->s_den;
+
+    m->a_re     = new_re;
+    m->a_im     = new_im;
+    m->s_num_re = new_re * w;
+    m->s_num_im = new_im * w;
+}
+
+void vis_set_angle_deg(VisualModel *m, double angle_deg) {
+    if (!m) return;
+
+    double s = vis_scale_px_per_mm(m);
+    double r = angle_deg * ACE_PI / 180.0;
+
+    reanchor(m, s * cos(r), s * sin(r));
+    m->last_angle_deg = angle_deg;
+}
+
+void vis_set_scale(VisualModel *m, double px_per_mm) {
+    if (!m || px_per_mm <= 1e-6) return;
+
+    double s = vis_scale_px_per_mm(m);
+    if (s < 1e-9) return;
+
+    double f = px_per_mm / s;
+    reanchor(m, m->a_re * f, m->a_im * f);
+}
+
 void vis_relearn_begin(VisualModel *m) {
     if (!m) return;
 

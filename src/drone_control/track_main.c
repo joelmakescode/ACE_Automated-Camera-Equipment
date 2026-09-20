@@ -10,6 +10,7 @@
 
 #include "ball_detector.h"
 #include "figure.h"
+#include "floorref.h"
 #include "geometry.h"
 #include "kinematics.h"
 #include "motion.h"
@@ -55,6 +56,17 @@ typedef struct {
     double height_min_mm;
     double height_max_mm;
     int    height_warned;
+
+    /* Bodenlinien als absolute Referenz. */
+    int       use_lines;
+    FloorLine lines[2];
+    long      fix_angle;        /* Bilder mit Winkelfix */
+    long      fix_position;     /* Bilder mit Lagefix   */
+    long      fix_scale;
+    double    last_tilt_deg;
+    int       tilt_warned;
+    double    last_fix_err_mm;  /* Lagefix gegen Koppelnavigation */
+    double    fix_err_worst_mm;
 
     long   cycles;
     long   observations;        /* Messungen waehrend der Fahrten */
@@ -147,6 +159,71 @@ static void feed_observation(Tracker *t, double from_x, double from_y,
     vis_observe(&t->vis, to_x - from_x, to_y - from_y,
                 eu0, ev0, eu1, ev1,
                 ACE_VIS_GATE_REL, ACE_VIS_GATE_PX, now_seconds());
+}
+
+/* Bodenlinien auswerten und daraus setzen, was sie hergeben.
+ *
+ * Das ist der unabhaengige Anker: Winkel und Massstab werden hier gemessen
+ * statt geschaetzt, und die Lage wird nicht koppelnavigiert, sondern
+ * abgelesen. Damit faellt auch der Schlupf weg - nicht abgefedert, sondern
+ * ueberschrieben. Arbeitet auf dem Bild, das bd_detect zuletzt geholt hat. */
+static void read_floor(Tracker *t) {
+    if (!t->use_lines) return;
+
+    LineResult seen[2];
+    for (int i = 0; i < 2; i++) {
+        if (bd_detect_line(t->cam, &t->lines[i].colour, &seen[i]) != 0) {
+            seen[i].found = false;
+        }
+    }
+
+    FloorFix fix;
+    floor_solve(t->lines, seen, vis_scale_px_per_mm(&t->vis), &fix);
+    if (fix.lines_seen == 0) return;
+
+    if (fix.have_scale) {
+        vis_set_scale(&t->vis, fix.px_per_mm);
+        t->fix_scale++;
+    }
+    if (fix.have_angle) {
+        vis_set_angle_deg(&t->vis, fix.camera_angle_deg);
+        t->fix_angle++;
+    }
+
+    if (fix.lines_seen == 2) {
+        t->last_tilt_deg = fix.included_error_deg;
+        if (!t->tilt_warned && fabs(fix.included_error_deg) > ACE_TILT_WARN_DEG) {
+            t->tilt_warned = 1;
+            fprintf(stderr,
+                    "\nDer eingeschlossene Winkel der Bodenlinien weicht um "
+                    "%+.2f Grad ab.\nEine Drehstreckung erhaelt Winkel, eine "
+                    "Perspektive nicht: die Kamera steht\nschief. Das Bild "
+                    "bleibt brauchbar, die Lage verschiebt sich aber.\n",
+                    fix.included_error_deg);
+        }
+    }
+
+    if (fix.have_position) {
+        long   steps[ACE_MOTOR_COUNT];
+        double x, y, h;
+
+        motion_positions(steps);
+        kin_pose(steps, &x, &y, &h);
+
+        double err = sqrt((fix.x_mm - x) * (fix.x_mm - x)
+                        + (fix.y_mm - y) * (fix.y_mm - y));
+        t->last_fix_err_mm = err;
+        if (err > t->fix_err_worst_mm) t->fix_err_worst_mm = err;
+
+        /* Nicht hart uebernehmen. Die Koppelnavigation ist kurzfristig ruhig
+         * und die Messung langfristig richtig - also anteilig nachziehen.
+         * Ein harter Reset je Bild traege das Messrauschen voll hinein.
+         * Und auf der gemessenen Hoehe, sonst wirft der Reset sie weg. */
+        double blend = ACE_FIX_BLEND;
+        kin_reset_at(x + blend * (fix.x_mm - x),
+                     y + blend * (fix.y_mm - y), h, steps);
+        t->fix_position++;
+    }
 }
 
 /* Massstab an den aktuellen Kameraabstand koppeln. Die Plattform haengt,
@@ -372,7 +449,11 @@ static int follow(Tracker *t, long max_cycles) {
         double err = sqrt(eu * eu + ev * ev);
         t->cycles++;
 
+        /* Erst die Hoehenkopplung, dann die Bodenlinien: die Linien setzen
+         * den Massstab aus der Strichteilung und sollen das letzte Wort
+         * haben, weil sie ihn messen statt ihn zu rechnen. */
         sync_scale_to_height(t);
+        read_floor(t);
 
         /* Die Streuung misst das Zufaellige in der Mechanik. Ein
          * gleichbleibender Verlust steckt im Massstab und stoert nicht. */
@@ -541,6 +622,29 @@ static void print_result(const Tracker *t) {
     }
     printf("  Bilder ohne Objekt           %d\n", t->lost);
 
+    if (t->use_lines) {
+        printf("\n  Bodenlinien\n");
+        printf("    Winkel gemessen            %ld x\n", t->fix_angle);
+        printf("    Massstab gemessen          %ld x\n", t->fix_scale);
+        printf("    Lage gemessen              %ld x", t->fix_position);
+        if (t->fix_position > 0) {
+            printf("   (zuletzt %.1f mm neben der\n"
+                   "                               Koppelnavigation, "
+                   "schlechtestens %.1f mm)",
+                   t->last_fix_err_mm, t->fix_err_worst_mm);
+        }
+        printf("\n");
+        printf("    Kippen der Kamera          %+.2f Grad im eingeschlossenen "
+               "Winkel%s\n", t->last_tilt_deg,
+               fabs(t->last_tilt_deg) > ACE_TILT_WARN_DEG ? "  (schief)" : "");
+        if (t->fix_angle == 0) {
+            printf("    Keine Linie erkannt. Farbbereiche in geometry.h "
+                   "pruefen\n"
+                   "    (ACE_LINE_A_* blau, ACE_LINE_B_* gruen) oder mit\n"
+                   "    --no-lines ohne Referenz fahren.\n");
+        }
+    }
+
     if (t->height_max_mm > t->height_min_mm) {
         printf("  Hoehe unter den Ankern       %.1f .. %.1f mm"
                "  (Nennmass %.0f)\n",
@@ -645,6 +749,15 @@ int main(int argc, char **argv) {
     t.settle_ms    = ACE_TRACK_SETTLE_MS;
     t.quiet        = 0;
     t.stream_on    = 0;
+    t.use_lines    = 1;
+    t.fix_angle    = 0;
+    t.fix_position = 0;
+    t.fix_scale    = 0;
+    t.last_tilt_deg = 0.0;
+    t.tilt_warned  = 0;
+    t.last_fix_err_mm = 0.0;
+    t.fix_err_worst_mm = 0.0;
+    floor_default_lines(t.lines);
     t.weak         = ACE_WEAK_MOTOR;
     t.slip_total_mm = 0.0;
     t.slip_events  = 0;
@@ -668,6 +781,7 @@ int main(int argc, char **argv) {
         {"weak-motor",  required_argument, 0, 'W'},
         {"preload",     required_argument, 0, 'P'},
         {"no-learn",    no_argument,       0, 'L'},
+        {"no-lines",    no_argument,       0, 'N'},
         {"gain",        required_argument, 0, 'g'},
         {"tolerance",   required_argument, 0, 'e'},
         {"max-step",    required_argument, 0, 'M'},
@@ -695,7 +809,7 @@ int main(int argc, char **argv) {
 
     int opt, oi = 0;
     while ((opt = getopt_long(argc, argv,
-                              "d:w:H:t::W:P:Lg:e:M:b:u:c:T:S:a:nqf:l:j:z:",
+                              "d:w:H:t::W:P:LNg:e:M:b:u:c:T:S:a:nqf:l:j:z:",
                               lo, &oi)) != -1) {
         switch (opt) {
             case 'f': focus_mode     = optarg; break;
@@ -708,6 +822,7 @@ int main(int argc, char **argv) {
             case 'W': t.weak         = atoi(optarg); break;
             case 'P': preload_mm     = atof(optarg); break;
             case 'L': do_learn       = 0; break;
+            case 'N': t.use_lines    = 0; break;
             case 'g': t.gain         = atof(optarg); break;
             case 'e': t.tolerance_px = atof(optarg); break;
             case 'M': t.max_step_mm  = atof(optarg); break;

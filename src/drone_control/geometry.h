@@ -17,8 +17,9 @@
 #define ACE_HOVER_HEIGHT_MM 150.0
 #endif
 
+/* Kamera ueber dem Brett, gemessen. */
 #ifndef ACE_CAMERA_HEIGHT_MM
-#define ACE_CAMERA_HEIGHT_MM 400.0
+#define ACE_CAMERA_HEIGHT_MM 300.0
 #endif
 
 #define ACE_RIG_HEIGHT_MM (ACE_CAMERA_HEIGHT_MM + ACE_HOVER_HEIGHT_MM)
@@ -74,8 +75,18 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_SLACK_PER_100MM 0.0
 #endif
 
+/* Breite des Sichtfelds auf dem Brett, in mm.
+ *
+ * NUR EIN STARTWERT. 400 mm auf 300 mm Abstand entsprechen 68 Grad
+ * Blickwinkel, was fuer das Arducam-Modul plausibel ist - gemessen ist es
+ * nicht. Der richtige Wert kommt aus dem Betrieb: die Strichteilung der
+ * Bodenlinien liefert px/mm unmittelbar, und ace_track gibt die daraus
+ * folgende Sichtbreite im Schlussbericht aus. Diesen Wert hier eintragen.
+ *
+ * Grob daneben schadet wenig: der Regelkreis bleibt stabil, solange der
+ * Startwert nicht um mehr als das Dreifache zu gross ist. */
 #ifndef ACE_VIEW_WIDTH_MM
-#define ACE_VIEW_WIDTH_MM 325.0
+#define ACE_VIEW_WIDTH_MM 400.0
 #endif
 
 #ifndef ACE_CENTER_TOLERANCE_PX
@@ -319,6 +330,63 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
  * gemeldet wird. */
 #ifndef ACE_ANGLE_RATE_WARN_DPS
 #define ACE_ANGLE_RATE_WARN_DPS 3.0
+#endif
+
+/* ---- Bodenlinien als absolute Referenz ---------------------------------
+ *
+ * Zwei Klebebaender durch den Mittelpunkt des Ankerfelds, entlang seiner
+ * Diagonalen. Verschiedene Farben, damit beide unterscheidbar bleiben: eine
+ * Linie ist 180 Grad periodisch, bei gleicher Farbe waere die Zuordnung und
+ * damit der Kamerawinkel bis auf rund 90 Grad offen.
+ *
+ * Matt kleben, nicht glaenzend. Ein Glanzpunkt wird im HSV-Raum weiss und
+ * faellt aus dem Farbbereich - die Linie reisst dort auf.
+ */
+
+/* Strichteilung in mm, Mitte zu Mitte. Daraus kommt der Massstab.
+ * 0 schaltet die Massstabsmessung ab, dann zaehlt nur Winkel und Lage. */
+#ifndef ACE_LINE_DASH_MM
+#define ACE_LINE_DASH_MM 50.0
+#endif
+
+/* Linie A: BLAU, von oben rechts nach unten links, also +34.5 Grad.
+ * OpenCV skaliert den Farbton auf 0..179, Blau liegt also bei etwa 110. */
+#ifndef ACE_LINE_A_H_MIN
+#define ACE_LINE_A_H_MIN 95
+#endif
+#ifndef ACE_LINE_A_H_MAX
+#define ACE_LINE_A_H_MAX 130
+#endif
+
+/* Linie B: GRUEN, von oben links nach unten rechts, also -34.5 Grad.
+ * Gruen liegt bei etwa 60. */
+#ifndef ACE_LINE_B_H_MIN
+#define ACE_LINE_B_H_MIN 45
+#endif
+#ifndef ACE_LINE_B_H_MAX
+#define ACE_LINE_B_H_MAX 85
+#endif
+
+#ifndef ACE_LINE_S_MIN
+#define ACE_LINE_S_MIN 90
+#endif
+#ifndef ACE_LINE_V_MIN
+#define ACE_LINE_V_MIN 50
+#endif
+
+/* Abweichung des eingeschlossenen Winkels vom Sollwert, ab der auf ein
+ * Kippen der Kamera hingewiesen wird. 10 Grad Kippen machen hier rund
+ * 0.8 Grad aus, 20 Grad rund 3.3. */
+#ifndef ACE_TILT_WARN_DEG
+#define ACE_TILT_WARN_DEG 1.5
+#endif
+
+/* Anteil, mit dem ein Lagefix aus den Bodenlinien in die Koppelnavigation
+ * einfliesst. 1.0 waere harte Uebernahme und truege das Messrauschen voll
+ * hinein; die Koppelnavigation ist kurzfristig die ruhigere Quelle, die
+ * Messung langfristig die richtige. */
+#ifndef ACE_FIX_BLEND
+#define ACE_FIX_BLEND 0.25
 #endif
 
 #endif

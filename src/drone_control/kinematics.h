@@ -10,6 +10,12 @@ extern "C" {
 
 void kin_reset(double x_mm, double y_mm, const long motor_steps[ACE_MOTOR_COUNT]);
 
+/* Wie kin_reset, aber auf einer vorgegebenen Hoehe. Wer aus einer Messung
+ * neu referenziert, waehrend die Plattform nicht auf Nennhoehe haengt,
+ * braucht das - sonst wirft der Reset die mitgefuehrte Hoehe weg. */
+void kin_reset_at(double x_mm, double y_mm, double height_mm,
+                  const long motor_steps[ACE_MOTOR_COUNT]);
+
 void kin_position(const long motor_steps[ACE_MOTOR_COUNT],
                   double *x_mm, double *y_mm);
 

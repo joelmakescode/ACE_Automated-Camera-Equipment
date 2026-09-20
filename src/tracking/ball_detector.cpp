@@ -303,6 +303,138 @@ extern "C" int bd_probe(BallDetector *bd, const HsvRange *range, int window_px,
     return 0;
 }
 
+/* ---- Bodenlinien --------------------------------------------------------
+ *
+ * Zwei Klebebaender auf der Flaeche, in bekannter Richtung und mit
+ * bekannter Strichteilung. Sie liefern, was die Bewegungsmessung nicht
+ * kann: den Kamerawinkel absolut aus einem einzigen Bild, ueber den
+ * Lotabstand eine Lagemessung, und ueber die Strichteilung den Massstab.
+ */
+
+static const cv::Mat *current_frame(BallDetector *bd) {
+    if (!bd->use_camera) {
+        return bd->static_image.empty() ? nullptr : &bd->static_image;
+    }
+    return bd->frame_buf.empty() ? nullptr : &bd->frame_buf;
+}
+
+/* Strichteilung: alle Maskenpunkte auf die Linienrichtung projizieren, die
+ * Mitten der belegten Abschnitte suchen und deren Abstand als Median
+ * nehmen. Der Median, weil einzelne Striche von der Plattform oder vom
+ * Objekt verdeckt sein koennen. */
+static double measure_dash(const std::vector<cv::Point> &pts,
+                           double cx, double cy, double ux, double uy) {
+    if (pts.size() < 50) return 0.0;
+
+    std::vector<double> ts;
+    ts.reserve(pts.size());
+    double tmin = 1e18, tmax = -1e18;
+
+    for (const cv::Point &p : pts) {
+        double px = p.x - cx;
+        double py = -(p.y - cy);
+        double t  = px * ux + py * uy;
+        ts.push_back(t);
+        if (t < tmin) tmin = t;
+        if (t > tmax) tmax = t;
+    }
+
+    int n = static_cast<int>(std::ceil(tmax - tmin)) + 1;
+    if (n < 60 || n > 20000) return 0.0;
+
+    std::vector<int> occ(static_cast<size_t>(n), 0);
+    for (double t : ts) {
+        int i = static_cast<int>(t - tmin);
+        if (i >= 0 && i < n) occ[static_cast<size_t>(i)]++;
+    }
+
+    std::vector<double> centres;
+    for (int i = 0; i < n; ) {
+        if (!occ[static_cast<size_t>(i)]) { i++; continue; }
+        int start = i;
+        while (i < n && occ[static_cast<size_t>(i)]) i++;
+        centres.push_back((start + i - 1) / 2.0);
+    }
+    if (centres.size() < 4) return 0.0;      /* zu wenige Striche im Bild */
+
+    std::vector<double> gaps;
+    for (size_t k = 1; k < centres.size(); k++) {
+        gaps.push_back(centres[k] - centres[k - 1]);
+    }
+    std::sort(gaps.begin(), gaps.end());
+    return gaps[gaps.size() / 2];
+}
+
+extern "C" int bd_detect_line(BallDetector *bd, const HsvRange *range,
+                              LineResult *out) {
+    if (!bd || !range || !out) return -1;
+
+    out->found     = false;
+    out->angle_deg = 0.0;
+    out->offset_px = 0.0;
+    out->dash_px   = 0.0;
+    out->pixels    = 0;
+
+    const cv::Mat *frame = current_frame(bd);
+    if (!frame) return -1;
+
+    /* Eigene Puffer, damit die Objektmaske aus bd_detect stehen bleibt. */
+    cv::Mat hsv, mask;
+    cv::cvtColor(*frame, hsv, cv::COLOR_BGR2HSV);
+
+    if (range->h_min <= range->h_max) {
+        cv::inRange(hsv, cv::Scalar(range->h_min, range->s_min, range->v_min),
+                         cv::Scalar(range->h_max, range->s_max, range->v_max), mask);
+    } else {
+        cv::Mat lo, hi;
+        cv::inRange(hsv, cv::Scalar(range->h_min, range->s_min, range->v_min),
+                         cv::Scalar(179, range->s_max, range->v_max), lo);
+        cv::inRange(hsv, cv::Scalar(0, range->s_min, range->v_min),
+                         cv::Scalar(range->h_max, range->s_max, range->v_max), hi);
+        cv::bitwise_or(lo, hi, mask);
+    }
+
+    /* Nur oeffnen, nicht schliessen: die Luecken der Strichlinie werden
+     * fuer den Massstab gebraucht und duerfen nicht zugebuegelt werden. */
+    cv::Mat k = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::morphologyEx(mask, mask, cv::MORPH_OPEN, k);
+
+    std::vector<cv::Point> pts;
+    cv::findNonZero(mask, pts);
+    out->pixels = static_cast<long>(pts.size());
+    if (pts.size() < 200) return 0;
+
+    /* Huber statt kleinster Quadrate: ein blauer Fleck im Hintergrund soll
+     * die Gerade nicht verziehen. */
+    cv::Vec4f fit;
+    cv::fitLine(pts, fit, cv::DIST_HUBER, 0, 0.01, 0.01);
+
+    double cx = frame->cols / 2.0;
+    double cy = frame->rows / 2.0;
+
+    /* In den rechtshaendigen Rahmen: v spiegeln. */
+    double ux = fit[0];
+    double uy = -fit[1];
+    double len = std::sqrt(ux * ux + uy * uy);
+    if (len < 1e-9) return 0;
+    ux /= len;
+    uy /= len;
+
+    double px = fit[2] - cx;
+    double py = -(fit[3] - cy);
+
+    out->offset_px = px * (-uy) + py * ux;          /* Lot auf die Normale */
+    out->angle_deg = std::atan2(uy, ux) * 180.0 / CV_PI;
+
+    /* Eine Linie hat keine Richtung, also auf -90..90 zusammenfalten. */
+    while (out->angle_deg >   90.0) out->angle_deg -= 180.0;
+    while (out->angle_deg <= -90.0) out->angle_deg += 180.0;
+
+    out->dash_px = measure_dash(pts, cx, cy, ux, uy);
+    out->found   = true;
+    return 0;
+}
+
 static cv::Mat draw_overlay(const cv::Mat &frame, const DetectionResult *result) {
     cv::Mat annotated = frame.clone();
     if (result->found) {

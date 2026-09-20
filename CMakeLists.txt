@@ -67,6 +67,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(ace_track
         src/drone_control/track_main.c
         src/drone_control/visual.c
+        src/drone_control/floorref.c
     )
     target_link_libraries(ace_track PRIVATE ace_core ace_vision)
     set_target_properties(ace_track PROPERTIES LINKER_LANGUAGE CXX)

@@ -40,6 +40,19 @@ typedef struct {
         long   frame_pixels;
     } ProbeResult;
 
+    /* Eine der beiden Bodenlinien, wie sie im Bild erscheint.
+     *
+     * Winkel und Lotabstand sind im rechtshaendigen Bildrahmen angegeben:
+     * u nach rechts, v nach oben, also Bild-v gespiegelt. So ist der
+     * Zusammenhang zum Feld eine reine Drehstreckung, siehe visual.h. */
+    typedef struct {
+        bool   found;
+        double angle_deg;   /* Richtung der Linie, -90 .. +90            */
+        double offset_px;   /* vorzeichenbehafteter Lotabstand zur Mitte */
+        double dash_px;     /* gemessene Strichperiode, 0 = unbestimmt   */
+        long   pixels;      /* Maskengroesse, als Guetemass              */
+    } LineResult;
+
     typedef struct BallDetector BallDetector;
     BallDetector *bd_create_camera(const char *device_path, int width, int height);
     BallDetector *bd_create_from_image(const char *image_path);
@@ -48,6 +61,13 @@ typedef struct {
 
     int bd_probe(BallDetector *detector, const HsvRange *range, int window_px,
                  ProbeResult *result);
+
+    /* Eine Bodenlinie im zuletzt geholten Bild suchen. Arbeitet auf dem
+     * Bild, das bd_detect zuletzt geholt hat - erst bd_detect rufen, dann
+     * hiermit je Linienfarbe nachfassen, sonst kostet es zusaetzliche
+     * Bilder und die Messungen gehoeren zu verschiedenen Zeitpunkten. */
+    int bd_detect_line(BallDetector *detector, const HsvRange *range,
+                       LineResult *result);
 
     void bd_set_view_mask(int enabled);
 

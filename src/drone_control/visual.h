@@ -116,6 +116,17 @@ double vis_drift_rms_mm(const VisualModel *m);
 double vis_drift_worst_mm(const VisualModel *m);
 double vis_angle_rate_dps(const VisualModel *m);
 
+/* Kamerawinkel von aussen setzen, gemessen statt geschaetzt.
+ *
+ * Das ist der Anker, der der reinen Bewegungsmessung fehlt: eine Bodenlinie
+ * mit bekannter Feldrichtung gibt die Drehung aus einem einzigen Bild. Der
+ * Massstab bleibt dabei unangetastet. */
+void vis_set_angle_deg(VisualModel *m, double angle_deg);
+
+/* Massstab von aussen setzen, etwa aus der Strichteilung einer Bodenlinie.
+ * Die Drehung bleibt unangetastet. */
+void vis_set_scale(VisualModel *m, double px_per_mm);
+
 /* Vor einer Lernphase aufrufen. Die bisherige Messhistorie wird auf das
  * Gewicht der Startvermutung eingedampft, der aktuelle Schaetzwert bleibt
  * als Ausgangspunkt stehen. Ohne das wuerde die alte Historie die frischen

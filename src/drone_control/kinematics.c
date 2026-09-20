@@ -82,11 +82,16 @@ double kin_cable_length(int motor, double x_mm, double y_mm) {
     return kin_cable_length_at(motor, x_mm, y_mm, ACE_HOVER_HEIGHT_MM);
 }
 
-void kin_reset(double x_mm, double y_mm, const long motor_steps[ACE_MOTOR_COUNT]) {
+void kin_reset_at(double x_mm, double y_mm, double height_mm,
+                  const long motor_steps[ACE_MOTOR_COUNT]) {
     for (int i = 0; i < ACE_MOTOR_COUNT; i++) {
-        g_reference_length[i] = kin_cable_length(i, x_mm, y_mm);
+        g_reference_length[i] = kin_cable_length_at(i, x_mm, y_mm, height_mm);
         g_reference_steps[i]  = motor_steps ? motor_steps[i] : 0;
     }
+}
+
+void kin_reset(double x_mm, double y_mm, const long motor_steps[ACE_MOTOR_COUNT]) {
+    kin_reset_at(x_mm, y_mm, ACE_HOVER_HEIGHT_MM, motor_steps);
 }
 
 static double current_length(int motor, const long motor_steps[ACE_MOTOR_COUNT]) {
