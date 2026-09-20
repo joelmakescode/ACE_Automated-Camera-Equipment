@@ -26,13 +26,13 @@ void floor_default_lines(FloorLine lines[2]) {
     lines[0].angle_deg = d;
     lines[0].dash_mm   = ACE_LINE_DASH_MM;
     lines[0].colour.h_min = ACE_LINE_A_H_MIN; lines[0].colour.h_max = ACE_LINE_A_H_MAX;
-    lines[0].colour.s_min = ACE_LINE_S_MIN;   lines[0].colour.s_max = 255;
+    lines[0].colour.s_min = ACE_LINE_A_S_MIN; lines[0].colour.s_max = 255;
     lines[0].colour.v_min = ACE_LINE_V_MIN;   lines[0].colour.v_max = 255;
 
     lines[1].angle_deg = -d;
     lines[1].dash_mm   = ACE_LINE_DASH_MM;
     lines[1].colour.h_min = ACE_LINE_B_H_MIN; lines[1].colour.h_max = ACE_LINE_B_H_MAX;
-    lines[1].colour.s_min = ACE_LINE_S_MIN;   lines[1].colour.s_max = 255;
+    lines[1].colour.s_min = ACE_LINE_B_S_MIN; lines[1].colour.s_max = 255;
     lines[1].colour.v_min = ACE_LINE_V_MIN;   lines[1].colour.v_max = 255;
 }
 

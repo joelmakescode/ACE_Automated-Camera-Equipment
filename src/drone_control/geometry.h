@@ -367,9 +367,15 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_LINE_B_H_MAX 85
 #endif
 
-#ifndef ACE_LINE_S_MIN
-#define ACE_LINE_S_MIN 90
+/* Mindestsaettigung, je Linie getrennt: die beiden Baender kommen
+ * unterschiedlich kraeftig an. Am Aufbau mit --mask geprueft. */
+#ifndef ACE_LINE_A_S_MIN
+#define ACE_LINE_A_S_MIN 60      /* blau  */
 #endif
+#ifndef ACE_LINE_B_S_MIN
+#define ACE_LINE_B_S_MIN 40      /* gruen */
+#endif
+
 #ifndef ACE_LINE_V_MIN
 #define ACE_LINE_V_MIN 50
 #endif
