@@ -129,6 +129,7 @@ typedef struct {
     double    bias_x_mm, bias_y_mm;
     double    bias_tilt_deg;    /* Kippen, als der Versatz gemessen wurde */
     int       bias_stale;       /* Kippen hat sich seither geaendert      */
+    int       fix_pos_on;   /* Linien als Lagegrundlage statt Koppelnav. */
 
     long   cycles;
     long   observations;        /* Messungen waehrend der Fahrten */
@@ -150,6 +151,7 @@ typedef struct {
     int    search_index;
     int    search_laps;
     int    searches_hit;
+    int    pinned;
 } Tracker;
 
 /* Lage des Objekts relativ zur Bildmitte, gemittelt ueber mehrere Treffer.
@@ -306,46 +308,58 @@ static void read_floor(Tracker *t, int calibrating) {
         return;
     }
 
-    /* Hat sich das Kippen seit der Messung des Versatzes geaendert, ist
-     * der Versatz veraltet - und ein veralteter Versatz zieht die Lage um
-     * bis zu mehrere Zentimeter schief. Dann lieber keinen Lagefix als
-     * einen falschen; Winkel und Massstab bleiben davon unberuehrt. */
-    if (t->bias_set && fix.lines_seen == 2 &&
-        fabs(fix.tilt_deg - t->bias_tilt_deg) > ACE_TILT_DRIFT_DEG) {
-        if (!t->bias_stale) {
-            t->bias_stale = 1;
-            fprintf(stderr,
-                    "\nDas Kippen der Kamera hat sich von %.1f auf %.1f Grad "
-                    "geaendert.\nDer beim Start gemessene Versatz der "
-                    "Bildmitte gilt damit nicht mehr,\nder Lagefix wird "
-                    "ausgesetzt. Winkel und Massstab laufen weiter.\n",
-                    t->bias_tilt_deg, fix.tilt_deg);
-        }
+    if (!fix.have_position) return;
+
+    long   steps[ACE_MOTOR_COUNT];
+    double x, y, h;
+    motion_positions(steps);
+    kin_pose(steps, &x, &y, &h);
+
+    /* Versatz der Bildmitte laufend messen.
+     *
+     * Solange eine Winde rutschte, war das unmoeglich: die Lage aus der
+     * Koppelnavigation war selbst fragwuerdig, und beide Groessen liessen
+     * sich nicht trennen. Mit gesundem Antrieb ist sie vertrauenswuerdig,
+     * und damit ist der Versatz schlicht die Differenz:
+     *
+     *     Versatz = Lage aus den Linien - Lage aus der Koppelnavigation
+     *
+     * Das ist genauer als jeder Umweg ueber den eingeschlossenen Winkel.
+     * Der ist unterhalb von zehn Grad Kippen so unempfindlich, dass ein
+     * Fuenftelgrad Messfehler schon zweistellige Millimeter im Versatz
+     * bedeutet - als Aenderungsanzeige taugt er, als Messgeraet nicht.
+     *
+     * Leicht geglaettet, damit einzelne Ausreisser nicht durchschlagen. */
+    double dx = fix.x_mm - x;
+    double dy = fix.y_mm - y;
+
+    if (!t->bias_set) {
+        t->bias_x_mm = dx;
+        t->bias_y_mm = dy;
+        t->bias_set  = 1;
+    } else {
+        double a = ACE_TILT_TRACK_BLEND;
+        t->bias_x_mm += a * (dx - t->bias_x_mm);
+        t->bias_y_mm += a * (dy - t->bias_y_mm);
     }
+    t->last_fix_err_mm = sqrt(dx * dx + dy * dy);
+    if (t->last_fix_err_mm > t->fix_err_worst_mm) {
+        t->fix_err_worst_mm = t->last_fix_err_mm;
+    }
+    t->fix_position++;
 
-    if (fix.have_position && t->bias_set && !t->bias_stale) {
-        long   steps[ACE_MOTOR_COUNT];
-        double x, y, h;
-
-        motion_positions(steps);
-        kin_pose(steps, &x, &y, &h);
-
-        fix.x_mm -= t->bias_x_mm;
-        fix.y_mm -= t->bias_y_mm;
-
-        double err = sqrt((fix.x_mm - x) * (fix.x_mm - x)
-                        + (fix.y_mm - y) * (fix.y_mm - y));
-        t->last_fix_err_mm = err;
-        if (err > t->fix_err_worst_mm) t->fix_err_worst_mm = err;
-
-        /* Nicht hart uebernehmen. Die Koppelnavigation ist kurzfristig ruhig
-         * und die Messung langfristig richtig - also anteilig nachziehen.
-         * Ein harter Reset je Bild traege das Messrauschen voll hinein.
-         * Und auf der gemessenen Hoehe, sonst wirft der Reset sie weg. */
+    /* Die Lage aus den Linien zu uebernehmen, waere jetzt ein Zirkel: der
+     * Versatz wird ja gerade aus der Differenz zu ihr bestimmt. Eines von
+     * beiden muss die Grundlage sein, und mit gesundem Antrieb ist das die
+     * Koppelnavigation - sie plant jedes Teilstueck neu aus den echten
+     * Zaehlerstaenden und driftet nicht. Wer die Linien trotzdem als
+     * Grundlage will, schaltet es hier ein; dann friert der Versatz auf
+     * seinem ersten Wert ein. */
+    if (t->fix_pos_on) {
+        double bx = fix.x_mm - t->bias_x_mm;
+        double by = fix.y_mm - t->bias_y_mm;
         double blend = ACE_FIX_BLEND;
-        kin_reset_at(x + blend * (fix.x_mm - x),
-                     y + blend * (fix.y_mm - y), h, steps);
-        t->fix_position++;
+        kin_reset_at(x + blend * (bx - x), y + blend * (by - y), h, steps);
     }
 }
 
@@ -662,8 +676,8 @@ static int track_cycle(Tracker *t) {
     if (err <= t->tolerance_px) {
         double h = read_height(t);
         if (!t->quiet) {
-            printf("\rzentriert   Bildfehler %5.1f px   r=%4.0f px"
-                   "   Kamera %+6.1f Grad   h %5.1f mm   Schlupf %+5.2f mm   ",
+            printf("\rzentriert  %5.1f px  r%4.0f  Kam %+5.1f  h%5.1f"
+                   "  Schlupf %+5.2f    ",
                    err, radius, vis_angle_deg(&t->vis), h, t->slip_total_mm);
             fflush(stdout);
         }
@@ -717,11 +731,55 @@ static int track_cycle(Tracker *t) {
     double ty = y0 + dy;
     kin_clamp(&tx, &ty);
 
+    /* Am Anschlag?
+     *
+     * Liegt das Objekt ausserhalb des Fahrbereichs, schneidet kin_clamp das
+     * Ziel auf die Grenze zurueck, der kommandierte Weg wird null und der
+     * Bildfehler bleibt stehen. Ohne diese Pruefung feuert der Regler
+     * endlos Fahrbefehle ab, die nichts bewirken - das Zucken, das dabei
+     * herauskommt, ist nur noch Rundungsrest. Naeher als an die Grenze
+     * kommt die Plattform nicht heran; also dort stehenbleiben, weiter
+     * zusehen und von selbst weitermachen, sobald es wieder geht. */
+    double want_mm = sqrt(dx * dx + dy * dy);
+    double real_mm = sqrt((tx - x0) * (tx - x0) + (ty - y0) * (ty - y0));
+
+    if (want_mm > 1.0 && real_mm < ACE_PINNED_MM) {
+        t->pinned++;
+        if (t->pinned == ACE_PINNED_LIMIT) {
+            printf("\nAnschlag bei %+.0f, %+.0f mm. Das Objekt liegt rund "
+                   "%.0f mm ausserhalb\ndes Fahrbereichs von +/-%.0f x "
+                   "+/-%.0f mm - naeher kommt die Plattform nicht.\n"
+                   "Sie bleibt stehen und macht weiter, sobald es wieder "
+                   "geht.\n",
+                   x0, y0, err / (vis_scale_px_per_mm(&t->vis) > 0.01
+                                  ? vis_scale_px_per_mm(&t->vis) : 1.0),
+                   ACE_REACH_LIMIT_X_MM, ACE_REACH_LIMIT_Y_MM);
+        }
+        if (t->pinned >= ACE_PINNED_LIMIT) {
+            if (!t->quiet) {
+                printf("\rAnschlag %+6.1f,%+6.1f  Fehler %5.0f px  "
+                       "Kam %+5.1f Grad      ", x0, y0, err,
+                       vis_angle_deg(&t->vis));
+                fflush(stdout);
+            }
+            t->prev_err_px = err;
+            check_slip(t);
+            return 0;
+        }
+    } else {
+        if (t->pinned >= ACE_PINNED_LIMIT) {
+            printf("\nWieder im Fahrbereich.\n");
+        }
+        t->pinned = 0;
+    }
+
+    /* Kurz gehalten, damit ein 80 Zeichen breites Terminal sie nicht
+     * umbricht - sonst springt das Wagenrueckl auf die umgebrochene Zeile
+     * und hinterlaesst Bruchstuecke. */
     if (!t->quiet) {
-        printf("\rZug %-4ld Bildfehler %5.1f px  ->  %+6.1f,%+6.1f mm"
-               "   Lage %+6.1f,%+6.1f  h %5.1f   Kamera %+6.1f Grad   ",
-               t->cycles, err, dx, dy, tx, ty, read_height(t),
-               vis_angle_deg(&t->vis));
+        printf("\rZug %-5ld %5.0f px -> %+6.1f,%+6.1f mm  @%+6.1f,%+6.1f"
+               "  Kam %+5.1f    ",
+               t->cycles, err, dx, dy, tx, ty, vis_angle_deg(&t->vis));
         fflush(stdout);
     }
 
@@ -839,6 +897,8 @@ static void update_status(Tracker *t) {
     const char *mode =
         !t->tracking ? (t->learned ? "wartet" : "wartet, noch nicht eingemessen")
       : (t->lost_run >= ACE_SEARCH_AFTER_LOST && t->search_on) ? "Suchfahrt"
+      : t->pinned >= ACE_PINNED_LIMIT ? "am Anschlag"
+
       : t->lost_run > 0 ? "Objekt verloren"
       : "verfolgt";
 
@@ -851,16 +911,18 @@ static void update_status(Tracker *t) {
         "Bodenlinien  Winkel %ld x   Massstab %ld x   Lage %ld x\n"
         "Zuege        %ld   ohne Objekt %d   neu gelernt %d\n"
         "Suchfahrt    %s   Punkt %d/%d   Durchlaeufe %d   Funde %d\n"
+        "Kippversatz  %+.0f, %+.0f mm   Bildmitte gegen das Lot unter der Kamera\n"
         "Streuung     %.2f mm RMS   Kamera dreht %+.2f Grad/s\n",
         mode,
         x, y, h,
         vis_angle_deg(&t->vis), vis_scale_px_per_mm(&t->vis), t->last_tilt_deg,
-        t->bias_stale ? "  (Versatz veraltet, Lagefix aus)" : "",
+        t->fix_pos_on ? "  (Linien als Lagegrundlage)" : "",
         t->fix_angle, t->fix_scale, t->fix_position,
         t->cycles, t->lost, t->relearns,
         t->search_on ? "ein" : "aus",
         (t->search_index % (ACE_SEARCH_COLS * ACE_SEARCH_ROWS)) + 1,
         ACE_SEARCH_COLS * ACE_SEARCH_ROWS, t->search_laps, t->searches_hit,
+        t->bias_x_mm, t->bias_y_mm,
         vis_drift_rms_mm(&t->vis), vis_angle_rate_dps(&t->vis));
 
     bd_stream_set_status(buf);
@@ -1042,20 +1104,24 @@ static void print_result(const Tracker *t) {
 
         if (t->bias_set) {
             printf("    Versatz der Bildmitte      %+.0f, %+.0f mm"
-                   "   (beim Start gemessen, Kippen %.1f Grad)\n",
-                   t->bias_x_mm, t->bias_y_mm, t->bias_tilt_deg);
-            if (t->bias_stale) {
-                printf("    Dieser Versatz gilt nicht mehr - das Kippen hat "
-                       "sich geaendert.\n"
-                       "    Der Lagefix wurde ausgesetzt. Zum Neumessen die "
-                       "Plattform wieder\n"
-                       "    auf den Kreuzungspunkt stellen und neu starten.\n");
-            }
+                   "   (zuletzt gemessen, Betrag %.0f mm)\n",
+                   t->bias_x_mm, t->bias_y_mm,
+                   sqrt(t->bias_x_mm * t->bias_x_mm
+                      + t->bias_y_mm * t->bias_y_mm));
+            printf("    Um so weit zeigt die Bildmitte neben dem Lot unter "
+                   "der Kamera.\n"
+                   "    Die Plattform steht also um diesen Betrag neben dem "
+                   "Objekt, wenn\n"
+                   "    es in der Bildmitte steht - das ist das Kippen, kein "
+                   "Regelfehler.\n");
+            printf("    Grundlage der Lage         %s\n",
+                   t->fix_pos_on ? "Bodenlinien (--fix-position)"
+                                 : "Koppelnavigation");
         } else {
-            printf("    Versatz der Bildmitte      nicht gemessen - beim Start "
-                   "waren nicht beide\n"
-                   "                               Linien im Bild. Ohne ihn "
-                   "bleibt der Lagefix aus.\n");
+            printf("    Versatz der Bildmitte      nicht gemessen - dafuer "
+                   "muessen beide\n"
+                   "                               Linien gleichzeitig im "
+                   "Bild sein.\n");
         }
         if (t->fix_angle == 0) {
             printf("    Keine Linie erkannt. Farbbereiche in geometry.h "
@@ -1182,6 +1248,7 @@ int main(int argc, char **argv) {
     t.bias_y_mm    = 0.0;
     t.bias_tilt_deg = 0.0;
     t.bias_stale   = 0;
+    t.fix_pos_on   = 0;
     t.tracking     = 0;
     t.learned      = 0;
     t.prev_err_px  = -1.0;
@@ -1191,6 +1258,7 @@ int main(int argc, char **argv) {
     t.search_index = 0;
     t.search_laps  = 0;
     t.searches_hit = 0;
+    t.pinned       = 0;
     floor_default_lines(t.lines);
     t.weak         = ACE_WEAK_MOTOR;
     t.slip_total_mm = 0.0;
@@ -1217,6 +1285,7 @@ int main(int argc, char **argv) {
         {"no-learn",    no_argument,       0, 'L'},
         {"no-lines",    no_argument,       0, 'N'},
         {"no-search",   no_argument,       0, 'X'},
+        {"fix-position",no_argument,       0, 'Q'},
         {"gain",        required_argument, 0, 'g'},
         {"tolerance",   required_argument, 0, 'e'},
         {"max-step",    required_argument, 0, 'M'},
@@ -1244,7 +1313,7 @@ int main(int argc, char **argv) {
 
     int opt, oi = 0;
     while ((opt = getopt_long(argc, argv,
-                              "d:w:H:t::W:P:LNXg:e:M:b:u:c:T:S:a:nqf:l:j:z:",
+                              "d:w:H:t::W:P:LNXQg:e:M:b:u:c:T:S:a:nqf:l:j:z:",
                               lo, &oi)) != -1) {
         switch (opt) {
             case 'f': focus_mode     = optarg; break;
@@ -1259,6 +1328,7 @@ int main(int argc, char **argv) {
             case 'L': do_learn       = 0; break;
             case 'N': t.use_lines    = 0; break;
             case 'X': t.search_on    = 0; break;
+            case 'Q': t.fix_pos_on   = 1; break;
             case 'g': t.gain         = atof(optarg); break;
             case 'e': t.tolerance_px = atof(optarg); break;
             case 'M': t.max_step_mm  = atof(optarg); break;

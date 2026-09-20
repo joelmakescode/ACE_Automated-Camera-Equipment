@@ -268,11 +268,18 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 
 /* ---- Winde, die Schritte verliert ------------------------------------- */
 
-/* Diese Winde wird aus der Positionsschaetzung genommen. Die Lage bleibt
- * ueber die uebrigen drei vollstaendig bestimmt, und der Schlupf dieser
- * Winde wird dadurch messbar statt unsichtbar. -1 schaltet es ab. */
+/* Index einer Winde, die aus der Positionsschaetzung genommen wird; -1
+ * heisst: alle vier zaehlen.
+ *
+ * Mit gesundem Antrieb ist das Ausschliessen ein Verlust statt eines
+ * Gewinns - es kostet die Mittelung ueber beide Ankerpaare je Achse und
+ * legt die Pruefung auf Widerspruchsfreiheit der vier Seillaengen lahm.
+ * Seit der Motor getauscht ist, steht es darum auf -1.
+ *
+ * Rutscht wieder eine Winde, hier ihren Index eintragen (0..3). Die Lage
+ * bleibt dann ueber die uebrigen drei vollstaendig bestimmt. */
 #ifndef ACE_WEAK_MOTOR
-#define ACE_WEAK_MOTOR 1
+#define ACE_WEAK_MOTOR -1
 #endif
 
 /* Vorspannung auf der schwachen Winde: ihr Seil wird um diesen Betrag
@@ -465,6 +472,26 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
  * Rauschpixel soll sie nicht beenden. */
 #ifndef ACE_SEARCH_CONFIRM
 #define ACE_SEARCH_CONFIRM 3
+#endif
+
+/* Fahrweg, unter dem eine Fahrt als wirkungslos gilt. Bleibt weniger uebrig,
+ * nachdem kin_clamp das Ziel auf die Fahrgrenze zurueckgeschnitten hat,
+ * steht die Plattform am Anschlag. */
+#ifndef ACE_PINNED_MM
+#define ACE_PINNED_MM 0.5
+#endif
+
+/* Zuege am Anschlag, bevor der Regler aufhoert, wirkungslose Fahrbefehle
+ * abzusetzen. */
+#ifndef ACE_PINNED_LIMIT
+#define ACE_PINNED_LIMIT 3
+#endif
+
+/* Glaettung der laufenden Versatzmessung. Klein genug, dass einzelne
+ * Ausreisser nicht durchschlagen, gross genug, dass ein sich drehendes
+ * Kabel innerhalb weniger Zuege ankommt. */
+#ifndef ACE_TILT_TRACK_BLEND
+#define ACE_TILT_TRACK_BLEND 0.2
 #endif
 
 #endif
