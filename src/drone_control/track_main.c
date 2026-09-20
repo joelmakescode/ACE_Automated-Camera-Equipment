@@ -68,6 +68,20 @@ typedef struct {
     double    last_fix_err_mm;  /* Lagefix gegen Koppelnavigation */
     double    fix_err_worst_mm;
 
+    /* Versatz der Bildmitte durch das Kippen der Kamera.
+     *
+     * Steht die Kamera schief, trifft die Bildmitte nicht den Punkt unter
+     * der Kamera. floor_solve meldet dann nicht die Lage der Plattform,
+     * sondern die des getroffenen Punktes. Beim Start ist die Lage der
+     * Plattform aber bekannt - sie steht von Hand auf dem Kreuzungspunkt -,
+     * und die Differenz ist genau dieser Versatz. Einmal gemessen, danach
+     * abgezogen. Er enthaelt zugleich den Stellfehler von Hand, was richtig
+     * ist: der Nullpunkt ist da, wo du die Plattform hingestellt hast. */
+    int       bias_set;
+    double    bias_x_mm, bias_y_mm;
+    double    bias_tilt_deg;    /* Kippen, als der Versatz gemessen wurde */
+    int       bias_stale;       /* Kippen hat sich seither geaendert      */
+
     long   cycles;
     long   observations;        /* Messungen waehrend der Fahrten */
     int    relearns;
@@ -167,7 +181,7 @@ static void feed_observation(Tracker *t, double from_x, double from_y,
  * statt geschaetzt, und die Lage wird nicht koppelnavigiert, sondern
  * abgelesen. Damit faellt auch der Schlupf weg - nicht abgefedert, sondern
  * ueberschrieben. Arbeitet auf dem Bild, das bd_detect zuletzt geholt hat. */
-static void read_floor(Tracker *t) {
+static void read_floor(Tracker *t, int calibrating) {
     if (!t->use_lines) return;
 
     LineResult seen[2];
@@ -203,12 +217,59 @@ static void read_floor(Tracker *t) {
         }
     }
 
-    if (fix.have_position) {
+    /* Beim Start steht die Plattform von Hand auf dem Kreuzungspunkt, ihre
+     * Lage ist also null. Was floor_solve trotzdem meldet, ist der Versatz
+     * der Bildmitte durch das Kippen - hier gemessen, spaeter abgezogen.
+     * Winkel und Massstab sind oben schon uebernommen worden, die gelten
+     * auch waehrend der Kalibrierung. */
+    if (calibrating) {
+        if (fix.have_position) {
+            t->bias_x_mm     = fix.x_mm;
+            t->bias_y_mm     = fix.y_mm;
+            t->bias_tilt_deg = fix.tilt_deg;
+            t->bias_set      = 1;
+
+            printf("Kippen der Kamera   %.1f Grad, Bildmitte zeigt %.0f mm "
+                   "daneben (%+.0f, %+.0f)\n", fix.tilt_deg,
+                   sqrt(fix.x_mm * fix.x_mm + fix.y_mm * fix.y_mm),
+                   fix.x_mm, fix.y_mm);
+            printf("                    gemessen und ab jetzt von jedem "
+                   "Lagefix abgezogen\n");
+        } else {
+            printf("Versatz durch Kippen nicht messbar: dafuer muessen beide "
+                   "Bodenlinien im\nBild sein, sichtbar ist nur %d. Der "
+                   "Lagefix bleibt aus; Winkel und\nMassstab kommen "
+                   "trotzdem.\n", fix.lines_seen);
+        }
+        return;
+    }
+
+    /* Hat sich das Kippen seit der Messung des Versatzes geaendert, ist
+     * der Versatz veraltet - und ein veralteter Versatz zieht die Lage um
+     * bis zu mehrere Zentimeter schief. Dann lieber keinen Lagefix als
+     * einen falschen; Winkel und Massstab bleiben davon unberuehrt. */
+    if (t->bias_set && fix.lines_seen == 2 &&
+        fabs(fix.tilt_deg - t->bias_tilt_deg) > ACE_TILT_DRIFT_DEG) {
+        if (!t->bias_stale) {
+            t->bias_stale = 1;
+            fprintf(stderr,
+                    "\nDas Kippen der Kamera hat sich von %.1f auf %.1f Grad "
+                    "geaendert.\nDer beim Start gemessene Versatz der "
+                    "Bildmitte gilt damit nicht mehr,\nder Lagefix wird "
+                    "ausgesetzt. Winkel und Massstab laufen weiter.\n",
+                    t->bias_tilt_deg, fix.tilt_deg);
+        }
+    }
+
+    if (fix.have_position && t->bias_set && !t->bias_stale) {
         long   steps[ACE_MOTOR_COUNT];
         double x, y, h;
 
         motion_positions(steps);
         kin_pose(steps, &x, &y, &h);
+
+        fix.x_mm -= t->bias_x_mm;
+        fix.y_mm -= t->bias_y_mm;
 
         double err = sqrt((fix.x_mm - x) * (fix.x_mm - x)
                         + (fix.y_mm - y) * (fix.y_mm - y));
@@ -238,10 +299,25 @@ static void sync_scale_to_height(Tracker *t) {
 }
 
 /* Fahrt abwarten und dabei weiter Bilder holen: das haelt die Kamerapipe
- * leer und liefert nebenbei die laufenden Messungen. */
-static int drive_and_drain(Tracker *t) {
+ * leer und liefert nebenbei die laufenden Messungen.
+ *
+ * start_err_px > 0 schaltet den vorzeitigen Ausstieg ein. Eine Fahrt ueber
+ * den vollen Weg dauert knapp vier Sekunden; sie blind zu Ende zu fahren
+ * heisst, vier Sekunden lang nicht auf das Bild zu reagieren. Fuer ein
+ * stehendes Objekt ist das gleichgueltig, fuer ein wanderndes nicht.
+ * Darum wird unterwegs abgebrochen, sobald das Bild es verlangt:
+ *
+ *   - Fehler unter die Toleranz gefallen: das Ziel ist erreicht, oft weil
+ *     das Objekt uns entgegengekommen ist. Weiterfahren hiesse ueberfahren.
+ *   - Fehler deutlich gewachsen: das Objekt ist in die andere Richtung
+ *     gelaufen, der geplante Weg zeigt in die falsche Richtung.
+ *
+ * Rueckgabe: 0 durchgefahren, 1 Abbruch durch den Nutzer, 2 vorzeitig
+ * beendet (neu planen), -1 Kamerafehler. */
+static int drive_and_drain(Tracker *t, double start_err_px) {
     int    have_anchor = 0;
     double ax = 0.0, ay = 0.0, aeu = 0.0, aev = 0.0;
+    int    early = 0;
 
     while (path_busy() && !g_abort) {
         DetectionResult seen;
@@ -256,6 +332,16 @@ static int drive_and_drain(Tracker *t) {
 
         double eu = seen.x - t->width  / 2.0;
         double ev = seen.y - t->height / 2.0;
+
+        if (start_err_px > 0.0) {
+            double err = sqrt(eu * eu + ev * ev);
+            if (err <= t->tolerance_px ||
+                err >  start_err_px * ACE_TRACK_ABORT_GROW) {
+                path_abort();
+                early = 2;
+                break;
+            }
+        }
 
         if (!have_anchor) {
             ax = x; ay = y; aeu = eu; aev = ev;
@@ -287,7 +373,7 @@ static int drive_and_drain(Tracker *t) {
             if (t->stream_on) bd_stream_push(t->cam, &seen);
         }
     }
-    return 0;
+    return early;
 }
 
 /* ---------------------------------------------------- schwache Winde */
@@ -362,7 +448,7 @@ static int learn(Tracker *t) {
         kin_clamp(&tx, &ty);
 
         if (path_start(tx, ty, t->delay_us) != 0) return -1;
-        if (drive_and_drain(t) != 0) return -1;
+        if (drive_and_drain(t, -1.0) != 0) return -1;
 
         m = measure(t, &eu1, &ev1, NULL);
         if (m != 0) {
@@ -453,7 +539,7 @@ static int follow(Tracker *t, long max_cycles) {
          * den Massstab aus der Strichteilung und sollen das letzte Wort
          * haben, weil sie ihn messen statt ihn zu rechnen. */
         sync_scale_to_height(t);
-        read_floor(t);
+        read_floor(t, 0);
 
         /* Die Streuung misst das Zufaellige in der Mechanik. Ein
          * gleichbleibender Verlust steckt im Massstab und stoert nicht. */
@@ -493,7 +579,18 @@ static int follow(Tracker *t, long max_cycles) {
 
         /* Klingt der Fehler nicht ab, liegt der geschaetzte Kamerawinkel
          * weiter daneben, als der Regler von sich aus einfangen kann. */
-        if (prev_err > 0.0 && err > prev_err * ACE_TRACK_STALL_RATIO) {
+        /* Neu lernen nur, wenn der Winkel wirklich geschaetzt ist.
+         *
+         * Liefern die Bodenlinien ihn, ist er gemessen und kann nicht der
+         * Grund fuer ausbleibenden Fortschritt sein - dann laeuft das
+         * Objekt schlicht schneller davon, als die Plattform folgen kann.
+         * Eine Lernphase waere dort sogar schaedlich: sie faehrt vier feste
+         * Probefahrten mit weit offenem Ausreisserfilter und wuerde die
+         * Bewegung des Objekts als Bildmodell lernen. */
+        int angle_measured = (t->use_lines && t->fix_angle > 0);
+
+        if (!angle_measured &&
+            prev_err > 0.0 && err > prev_err * ACE_TRACK_STALL_RATIO) {
             if (++stall >= ACE_TRACK_STALL_LIMIT) {
                 printf("\nBildfehler klingt nicht ab (%.0f -> %.0f px). "
                        "Kamera hat sich gedreht,\nBildmodell wird neu gelernt.\n",
@@ -536,9 +633,12 @@ static int follow(Tracker *t, long max_cycles) {
         }
 
         if (path_start(tx, ty, t->delay_us) != 0) return -1;
-        int r = drive_and_drain(t);
+        int r = drive_and_drain(t, err);
         if (r < 0) return -1;
-        if (r > 0) break;
+        if (r == 1) break;          /* Ctrl-C */
+        /* r == 2 heisst nur: unterwegs abgebrochen, weil das Bild es
+         * verlangte. Der naechste Durchlauf plant aus der neuen Lage - die
+         * Teilfahrt ist eine gueltige Beobachtung wie jede andere. */
 
         double x1, y1;
         read_state(&x1, &y1, steps);
@@ -637,6 +737,24 @@ static void print_result(const Tracker *t) {
         printf("    Kippen der Kamera          %+.2f Grad im eingeschlossenen "
                "Winkel%s\n", t->last_tilt_deg,
                fabs(t->last_tilt_deg) > ACE_TILT_WARN_DEG ? "  (schief)" : "");
+
+        if (t->bias_set) {
+            printf("    Versatz der Bildmitte      %+.0f, %+.0f mm"
+                   "   (beim Start gemessen, Kippen %.1f Grad)\n",
+                   t->bias_x_mm, t->bias_y_mm, t->bias_tilt_deg);
+            if (t->bias_stale) {
+                printf("    Dieser Versatz gilt nicht mehr - das Kippen hat "
+                       "sich geaendert.\n"
+                       "    Der Lagefix wurde ausgesetzt. Zum Neumessen die "
+                       "Plattform wieder\n"
+                       "    auf den Kreuzungspunkt stellen und neu starten.\n");
+            }
+        } else {
+            printf("    Versatz der Bildmitte      nicht gemessen - beim Start "
+                   "waren nicht beide\n"
+                   "                               Linien im Bild. Ohne ihn "
+                   "bleibt der Lagefix aus.\n");
+        }
         if (t->fix_angle == 0) {
             printf("    Keine Linie erkannt. Farbbereiche in geometry.h "
                    "pruefen\n"
@@ -757,6 +875,11 @@ int main(int argc, char **argv) {
     t.tilt_warned  = 0;
     t.last_fix_err_mm = 0.0;
     t.fix_err_worst_mm = 0.0;
+    t.bias_set     = 0;
+    t.bias_x_mm    = 0.0;
+    t.bias_y_mm    = 0.0;
+    t.bias_tilt_deg = 0.0;
+    t.bias_stale   = 0;
     floor_default_lines(t.lines);
     t.weak         = ACE_WEAK_MOTOR;
     t.slip_total_mm = 0.0;
@@ -966,6 +1089,22 @@ int main(int argc, char **argv) {
 
         double px_per_mm = (double)width / ACE_VIEW_WIDTH_MM;
         vis_init(&t.vis, px_per_mm, 0.0, ACE_VIS_LAMBDA);
+        vis_set_camera_distance(&t.vis, ACE_CAMERA_HEIGHT_MM);
+
+        /* Jetzt, wo die Plattform nachweislich auf dem Kreuzungspunkt
+         * steht, den Versatz der Bildmitte messen. Danach ist die Lage der
+         * Plattform nie wieder unabhaengig bekannt, also gibt es keine
+         * zweite Gelegenheit dafuer.
+         *
+         * Ein paar Bilder vorher holen: bd_detect_line wertet das zuletzt
+         * geholte aus, und das Objekt muss dafuer nicht sichtbar sein. */
+        for (int f = 0; f < 5 && !g_abort; f++) {
+            DetectionResult ignored;
+            if (bd_detect(t.cam, &t.range, &ignored) != 0) break;
+            if (t.stream_on) bd_stream_push(t.cam, &ignored);
+        }
+        read_floor(&t, 1);
+        printf("\n");
 
         if (do_learn) {
             printf("Lernphase: vier Probefahrten ueber %.0f mm. Objekt bitte\n"

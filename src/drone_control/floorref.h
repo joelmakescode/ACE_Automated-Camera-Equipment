@@ -49,6 +49,25 @@ typedef struct {
 
     double included_deg;       /* eingeschlossener Winkel im Bild      */
     double included_error_deg; /* Abweichung vom bekannten Sollwinkel  */
+
+    /* Kippen der Kamera und was es anrichtet.
+     *
+     * Steht die Kamera schief, zeigt ihre optische Achse nicht mehr
+     * senkrecht nach unten. Die Bildmitte trifft dann nicht den Punkt unter
+     * der Kamera, sondern einen um Z*tan(Kippen) versetzten - bei 10 Grad
+     * und 300 mm Hoehe sind das 53 mm. Genau um diese Strecke meldet die
+     * Lageberechnung falsch, und genau um sie faehrt der Regler die
+     * Plattform von der Objektmitte weg.
+     *
+     * Der Betrag folgt aus dem eingeschlossenen Winkel: eine Drehstreckung
+     * erhaelt Winkel, eine Perspektive staucht sie. Die Richtung des
+     * Kippens folgt daraus NICHT - zwei Linien geben dafuer zu wenig her.
+     * Der Versatz selbst wird darum nicht hieraus gerechnet, sondern beim
+     * Start gemessen, wo die Lage der Plattform bekannt ist. Dieser Wert
+     * dient dazu, das Veralten jener Messung zu erkennen. */
+    double tilt_deg;
+    double tilt_offset_mm;
+
     int    lines_seen;
 } FloorFix;
 

@@ -416,4 +416,19 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_LINE_MIN_BLOB_PX 150
 #endif
 
+/* Aenderung des Kippens, ab der der beim Start gemessene Versatz der
+ * Bildmitte als veraltet gilt. 2 Grad Kippaenderung sind bei 300 mm Hoehe
+ * rund 10 mm Versatz - so viel Lagefehler soll nicht unbemerkt einlaufen. */
+#ifndef ACE_TILT_DRIFT_DEG
+#define ACE_TILT_DRIFT_DEG 2.0
+#endif
+
+/* Waechst der Bildfehler waehrend einer Fahrt um diesen Faktor, zeigt der
+ * geplante Weg in die falsche Richtung - das Objekt ist davongelaufen.
+ * Dann wird die Fahrt abgebrochen und neu geplant, statt noch Sekunden
+ * blind weiterzufahren. */
+#ifndef ACE_TRACK_ABORT_GROW
+#define ACE_TRACK_ABORT_GROW 1.6
+#endif
+
 #endif

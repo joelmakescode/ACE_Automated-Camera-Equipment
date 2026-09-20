@@ -49,6 +49,8 @@ void floor_solve(const FloorLine lines[2], const LineResult seen[2],
     out->px_per_mm          = 0.0;
     out->included_deg       = 0.0;
     out->included_error_deg = 0.0;
+    out->tilt_deg           = 0.0;
+    out->tilt_offset_mm     = 0.0;
     out->lines_seen         = 0;
 
     for (int i = 0; i < 2; i++) if (seen[i].found) out->lines_seen++;
@@ -80,6 +82,29 @@ void floor_solve(const FloorLine lines[2], const LineResult seen[2],
         out->included_deg = fabs(fold(seen[0].angle_deg - seen[1].angle_deg));
         double want = fabs(fold(lines[0].angle_deg - lines[1].angle_deg));
         out->included_error_deg = out->included_deg - want;
+
+        /* Betrag des Kippens aus der Stauchung zurueckrechnen. Liegen die
+         * Linien bei +/-b, so erscheint b unter atan(tan(b)*cos(Kippen)),
+         * wenn die Kippachse quer dazu liegt. Nach cos(Kippen) aufgeloest:
+         *
+         *     cos(Kippen) = tan(b_gemessen) / tan(b_soll)
+         *
+         * Das gilt streng nur fuer diese eine Kippachse; bei anderer
+         * Richtung faellt die Stauchung kleiner aus. Der Wert ist damit
+         * eine Untergrenze, kein genauer Winkel - als Warnschwelle und als
+         * Aenderungsanzeige reicht er. */
+        double b_want = 0.5 * want          * ACE_PI / 180.0;
+        double b_seen = 0.5 * out->included_deg * ACE_PI / 180.0;
+
+        double t_want = tan(b_want);
+        if (t_want > 1e-6) {
+            double c = tan(b_seen) / t_want;
+            if (c > 1.0) c = 1.0;
+            if (c > 0.0) {
+                out->tilt_deg = acos(c) * 180.0 / ACE_PI;
+                out->tilt_offset_mm = ACE_CAMERA_HEIGHT_MM * tan(acos(c));
+            }
+        }
     }
 
     /* ---- Massstab aus der Strichteilung --------------------------------- */
