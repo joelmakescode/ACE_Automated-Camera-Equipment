@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "ball_detector.h"
@@ -30,6 +31,53 @@ static void sleep_ms(long ms) {
     struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
     nanosleep(&ts, NULL);
 }
+
+/* --------------------------------------------------------- Bedienseite */
+
+/* Bewusst schlicht: ein Bild, ein paar Knoepfe, eine Statuszeile. Kein
+ * Framework, keine Abhaengigkeiten - der Pi soll nichts nachladen muessen.
+ * Der Platzhalter S wird im Browser durch die gewaehlte Schrittweite
+ * ersetzt, damit die Tippfahrten nicht vier Varianten brauchen. */
+static const char ACE_PAGE[] =
+"<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+"<title>ACE</title><style>"
+"body{font-family:system-ui,sans-serif;background:#111;color:#ddd;margin:0;padding:10px}"
+"img{width:100%;max-width:860px;display:block;background:#000;border:1px solid #333}"
+"button{font-size:15px;padding:9px 13px;margin:2px;background:#2a2a2a;color:#eee;"
+"border:1px solid #555;border-radius:4px;cursor:pointer}"
+"button:active{background:#444}"
+"fieldset{border:1px solid #333;margin:8px 0;padding:8px}"
+"legend{color:#999;font-size:13px}"
+"pre{font-size:13px;line-height:1.4;margin:0;white-space:pre-wrap}"
+"select{font-size:15px;padding:6px;background:#2a2a2a;color:#eee;border:1px solid #555}"
+"</style></head><body>"
+"<img src=\"/stream.mjpg\" alt=\"Kamera\">"
+"<fieldset><legend>Kamera bewegen</legend>"
+"<div><button onclick=\"c('jog=0,S')\">hoch</button></div>"
+"<div><button onclick=\"c('jog=-S,0')\">links</button>"
+"<button onclick=\"c('jog=S,0')\">rechts</button></div>"
+"<div><button onclick=\"c('jog=0,-S')\">runter</button></div>"
+"<div style=\"margin-top:6px\">Schrittweite "
+"<select id=\"s\"><option>1</option><option>5</option>"
+"<option selected>10</option><option>25</option></select> mm"
+"<button onclick=\"c('center')\">zur Mitte</button>"
+"<button onclick=\"c('stop')\">Halt</button></div>"
+"</fieldset>"
+"<fieldset><legend>Verfolgung</legend>"
+"<button onclick=\"c('track=1')\">starten</button>"
+"<button onclick=\"c('track=0')\">anhalten</button>"
+"<button onclick=\"c('learn')\">neu lernen</button>"
+"</fieldset>"
+"<fieldset><legend>Status</legend><pre id=\"st\">wird geladen ...</pre></fieldset>"
+"<script>"
+"function c(x){var s=document.getElementById('s').value;"
+"fetch('/cmd?'+x.split('S').join(s));}"
+"function u(){fetch('/status').then(function(r){return r.text();})"
+".then(function(t){document.getElementById('st').textContent=t;})"
+".catch(function(){});}"
+"setInterval(u,1000);u();"
+"</script></body></html>";
 
 /* ------------------------------------------------------------- Zustand */
 
@@ -88,6 +136,14 @@ typedef struct {
     int    lost;
     int    drift_warned;
     int    cable_warned;
+
+    /* Betriebsart. Mit Bedienseite wartet das Programm, statt sofort zu
+     * verfolgen - sonst liefe es schon, bevor man den Knopf sieht. */
+    int    tracking;            /* 0 = wartet, 1 = verfolgt */
+    int    learned;             /* Bildmodell schon eingemessen? */
+    double prev_err_px;         /* fuer den Waechter, ueber Zuege hinweg */
+    int    stall;
+    int    lost_run;
 } Tracker;
 
 /* Lage des Objekts relativ zur Bildmitte, gemittelt ueber mehrere Treffer.
@@ -507,150 +563,285 @@ static int learn(Tracker *t) {
 
 /* ------------------------------------------------------------- Regelung */
 
-static int follow(Tracker *t, long max_cycles) {
-    double prev_err = -1.0;
-    int    stall    = 0;
-    int    lost_run = 0;
+/* Ein Regelzug: messen, entscheiden, fahren, nachmessen.
+ *
+ * Frueher war das eine Endlosschleife. Jetzt ist es ein einzelner Zug, weil
+ * die Bedienseite zwischen den Zuegen zu Wort kommen muss - sonst liesse
+ * sich die Verfolgung nicht anhalten, ohne das Programm zu beenden. Was
+ * ueber Zuege hinweg gilt, steht darum im Tracker statt auf dem Stapel. */
+static int track_cycle(Tracker *t) {
+    double eu, ev, radius;
 
-    while (!g_abort && (max_cycles <= 0 || t->cycles < max_cycles)) {
-        double eu, ev, radius;
-
-        int m = measure(t, &eu, &ev, &radius);
-        if (m < 0) return -1;
-        if (m > 0) {
-            /* Ohne Objekt wird nicht geraten. Stehenbleiben ist hier die
-             * sichere Antwort, erst recht mit einer Winde, die rutscht. */
-            if (lost_run == 0) {
-                printf("\nObjekt nicht im Bild, Plattform bleibt stehen.\n");
-            }
-            lost_run++;
-            t->lost++;
-            continue;
+    int m = measure(t, &eu, &ev, &radius);
+    if (m < 0) return -1;
+    if (m > 0) {
+        /* Ohne Objekt wird nicht geraten. Stehenbleiben ist hier die
+         * sichere Antwort, erst recht mit einer Winde, die rutscht. */
+        if (t->lost_run == 0) {
+            printf("\nObjekt nicht im Bild, Plattform bleibt stehen.\n");
         }
-        if (lost_run > 0) {
-            printf("Objekt wieder da.\n");
-            lost_run = 0;
-        }
+        t->lost_run++;
+        t->lost++;
+        return 0;
+    }
+    if (t->lost_run > 0) {
+        printf("Objekt wieder da.\n");
+        t->lost_run = 0;
+    }
 
-        double err = sqrt(eu * eu + ev * ev);
-        t->cycles++;
+    double err = sqrt(eu * eu + ev * ev);
+    t->cycles++;
 
-        /* Erst die Hoehenkopplung, dann die Bodenlinien: die Linien setzen
-         * den Massstab aus der Strichteilung und sollen das letzte Wort
-         * haben, weil sie ihn messen statt ihn zu rechnen. */
-        sync_scale_to_height(t);
-        read_floor(t, 0);
+    /* Erst die Hoehenkopplung, dann die Bodenlinien: die Linien setzen den
+     * Massstab aus der Strichteilung und sollen das letzte Wort haben, weil
+     * sie ihn messen statt ihn zu rechnen. */
+    sync_scale_to_height(t);
+    read_floor(t, 0);
 
-        /* Die Streuung misst das Zufaellige in der Mechanik. Ein
-         * gleichbleibender Verlust steckt im Massstab und stoert nicht. */
-        if (!t->drift_warned && t->vis.drift_count > 20 &&
-            vis_drift_rms_mm(&t->vis) > ACE_DRIFT_WARN_MM) {
-            t->drift_warned = 1;
-            fprintf(stderr,
-                    "\nKoppelnavigation und Bild weichen um %.1f mm (RMS) "
-                    "voneinander ab.\nDas ist der zufaellige Anteil - eine "
-                    "rutschende Winde sieht genau so aus.\nDer Regelkreis "
-                    "faengt es ab, die angezeigte Lage wird aber ungenau.\n",
-                    vis_drift_rms_mm(&t->vis));
-        }
-        if (!t->cable_warned &&
-            fabs(vis_angle_rate_dps(&t->vis)) > ACE_ANGLE_RATE_WARN_DPS) {
-            t->cable_warned = 1;
-            fprintf(stderr,
-                    "\nDer Kamerawinkel wandert mit %.1f Grad/s. Das Kabel "
-                    "zieht waehrend der Fahrt.\nGemessen wird ohnehin laufend "
-                    "ueber kurze Strecken, die Schaetzung kommt also mit -\n"
-                    "aber eine Zugentlastung am HDMI-Kabel waere das Richtige.\n",
-                    vis_angle_rate_dps(&t->vis));
-        }
+    /* Die Streuung misst das Zufaellige in der Mechanik. Ein
+     * gleichbleibender Verlust steckt im Massstab und stoert nicht. */
+    if (!t->drift_warned && t->vis.drift_count > 20 &&
+        vis_drift_rms_mm(&t->vis) > ACE_DRIFT_WARN_MM) {
+        t->drift_warned = 1;
+        fprintf(stderr,
+                "\nKoppelnavigation und Bild weichen um %.1f mm (RMS) "
+                "voneinander ab.\nDas ist der zufaellige Anteil - eine "
+                "rutschende Winde sieht genau so aus.\nDer Regelkreis "
+                "faengt es ab, die angezeigte Lage wird aber ungenau.\n",
+                vis_drift_rms_mm(&t->vis));
+    }
+    if (!t->cable_warned &&
+        fabs(vis_angle_rate_dps(&t->vis)) > ACE_ANGLE_RATE_WARN_DPS) {
+        t->cable_warned = 1;
+        fprintf(stderr,
+                "\nDer Kamerawinkel wandert mit %.1f Grad/s. Das Kabel "
+                "zieht waehrend der Fahrt.\nGemessen wird ohnehin laufend "
+                "ueber kurze Strecken, die Schaetzung kommt also mit -\n"
+                "aber eine Zugentlastung am HDMI-Kabel waere das Richtige.\n",
+                vis_angle_rate_dps(&t->vis));
+    }
 
-        if (err <= t->tolerance_px) {
-            double h = read_height(t);
-            if (!t->quiet) {
-                printf("\rzentriert   Bildfehler %5.1f px   r=%4.0f px"
-                       "   Kamera %+6.1f Grad   h %5.1f mm   Schlupf %+5.2f mm   ",
-                       err, radius, vis_angle_deg(&t->vis), h, t->slip_total_mm);
-                fflush(stdout);
-            }
-            prev_err = err;
-            check_slip(t);
-            continue;
-        }
-
-        /* Klingt der Fehler nicht ab, liegt der geschaetzte Kamerawinkel
-         * weiter daneben, als der Regler von sich aus einfangen kann. */
-        /* Neu lernen nur, wenn der Winkel wirklich geschaetzt ist.
-         *
-         * Liefern die Bodenlinien ihn, ist er gemessen und kann nicht der
-         * Grund fuer ausbleibenden Fortschritt sein - dann laeuft das
-         * Objekt schlicht schneller davon, als die Plattform folgen kann.
-         * Eine Lernphase waere dort sogar schaedlich: sie faehrt vier feste
-         * Probefahrten mit weit offenem Ausreisserfilter und wuerde die
-         * Bewegung des Objekts als Bildmodell lernen. */
-        int angle_measured = (t->use_lines && t->fix_angle > 0);
-
-        if (!angle_measured &&
-            prev_err > 0.0 && err > prev_err * ACE_TRACK_STALL_RATIO) {
-            if (++stall >= ACE_TRACK_STALL_LIMIT) {
-                printf("\nBildfehler klingt nicht ab (%.0f -> %.0f px). "
-                       "Kamera hat sich gedreht,\nBildmodell wird neu gelernt.\n",
-                       prev_err, err);
-                stall = 0;
-                t->relearns++;
-                if (learn(t) < 0) return -1;
-                prev_err = -1.0;
-                continue;
-            }
-        } else {
-            stall = 0;
-        }
-
-        double dx, dy;
-        vis_required_move(&t->vis, eu, ev, &dx, &dy);
-        dx *= t->gain;
-        dy *= t->gain;
-
-        double step = sqrt(dx * dx + dy * dy);
-        if (step > t->max_step_mm) {
-            dx *= t->max_step_mm / step;
-            dy *= t->max_step_mm / step;
-        }
-
-        double x0, y0;
-        long   steps[ACE_MOTOR_COUNT];
-        read_state(&x0, &y0, steps);
-
-        double tx = x0 + dx;
-        double ty = y0 + dy;
-        kin_clamp(&tx, &ty);
-
+    if (err <= t->tolerance_px) {
+        double h = read_height(t);
         if (!t->quiet) {
-            printf("\rZug %-4ld Bildfehler %5.1f px  ->  %+6.1f,%+6.1f mm"
-                   "   Lage %+6.1f,%+6.1f  h %5.1f   Kamera %+6.1f Grad   ",
-                   t->cycles, err, dx, dy, tx, ty, read_height(t),
-                   vis_angle_deg(&t->vis));
+            printf("\rzentriert   Bildfehler %5.1f px   r=%4.0f px"
+                   "   Kamera %+6.1f Grad   h %5.1f mm   Schlupf %+5.2f mm   ",
+                   err, radius, vis_angle_deg(&t->vis), h, t->slip_total_mm);
             fflush(stdout);
         }
-
-        if (path_start(tx, ty, t->delay_us) != 0) return -1;
-        int r = drive_and_drain(t, err);
-        if (r < 0) return -1;
-        if (r == 1) break;          /* Ctrl-C */
-        /* r == 2 heisst nur: unterwegs abgebrochen, weil das Bild es
-         * verlangte. Der naechste Durchlauf plant aus der neuen Lage - die
-         * Teilfahrt ist eine gueltige Beobachtung wie jede andere. */
-
-        double x1, y1;
-        read_state(&x1, &y1, steps);
-
-        double eu1, ev1;
-        if (measure(t, &eu1, &ev1, NULL) == 0) {
-            vis_update(&t->vis, x1 - x0, y1 - y0, eu - eu1, ev - ev1,
-                       ACE_VIS_GATE_REL, ACE_VIS_GATE_PX);
-        }
-
+        t->prev_err_px = err;
         check_slip(t);
-        prev_err = err;
+        return 0;
+    }
+
+    /* Neu lernen nur, wenn der Winkel wirklich geschaetzt ist.
+     *
+     * Liefern die Bodenlinien ihn, ist er gemessen und kann nicht der Grund
+     * fuer ausbleibenden Fortschritt sein - dann laeuft das Objekt schlicht
+     * schneller davon, als die Plattform folgen kann. Eine Lernphase waere
+     * dort sogar schaedlich: sie faehrt vier feste Probefahrten mit weit
+     * offenem Ausreisserfilter und wuerde die Bewegung des Objekts als
+     * Bildmodell lernen. */
+    int angle_measured = (t->use_lines && t->fix_angle > 0);
+
+    if (!angle_measured && t->prev_err_px > 0.0 &&
+        err > t->prev_err_px * ACE_TRACK_STALL_RATIO) {
+        if (++t->stall >= ACE_TRACK_STALL_LIMIT) {
+            printf("\nBildfehler klingt nicht ab (%.0f -> %.0f px). "
+                   "Kamera hat sich gedreht,\nBildmodell wird neu gelernt.\n",
+                   t->prev_err_px, err);
+            t->stall = 0;
+            t->relearns++;
+            if (learn(t) < 0) return -1;
+            t->prev_err_px = -1.0;
+            return 0;
+        }
+    } else {
+        t->stall = 0;
+    }
+
+    double dx, dy;
+    vis_required_move(&t->vis, eu, ev, &dx, &dy);
+    dx *= t->gain;
+    dy *= t->gain;
+
+    double step = sqrt(dx * dx + dy * dy);
+    if (step > t->max_step_mm) {
+        dx *= t->max_step_mm / step;
+        dy *= t->max_step_mm / step;
+    }
+
+    double x0, y0;
+    long   steps[ACE_MOTOR_COUNT];
+    read_state(&x0, &y0, steps);
+
+    double tx = x0 + dx;
+    double ty = y0 + dy;
+    kin_clamp(&tx, &ty);
+
+    if (!t->quiet) {
+        printf("\rZug %-4ld Bildfehler %5.1f px  ->  %+6.1f,%+6.1f mm"
+               "   Lage %+6.1f,%+6.1f  h %5.1f   Kamera %+6.1f Grad   ",
+               t->cycles, err, dx, dy, tx, ty, read_height(t),
+               vis_angle_deg(&t->vis));
+        fflush(stdout);
+    }
+
+    if (path_start(tx, ty, t->delay_us) != 0) return -1;
+    int r = drive_and_drain(t, err);
+    if (r < 0) return -1;
+    if (r == 1) return 0;       /* Ctrl-C, die aeussere Schleife bricht ab */
+    /* r == 2 heisst nur: unterwegs abgebrochen, weil das Bild es verlangte.
+     * Der naechste Zug plant aus der neuen Lage - die Teilfahrt ist eine
+     * gueltige Beobachtung wie jede andere. */
+
+    double x1, y1;
+    read_state(&x1, &y1, steps);
+
+    double eu1, ev1;
+    if (measure(t, &eu1, &ev1, NULL) == 0) {
+        vis_update(&t->vis, x1 - x0, y1 - y0, eu - eu1, ev - ev1,
+                   ACE_VIS_GATE_REL, ACE_VIS_GATE_PX);
+    }
+
+    check_slip(t);
+    t->prev_err_px = err;
+    return 0;
+}
+
+/* ----------------------------------------------------------- Bedienseite */
+
+/* Wartezustand: Bilder weiterholen, damit der Stream lebt und die
+ * Kamerapipe nicht volllaeuft, und die Bodenlinien weiter auswerten. */
+static int idle_tick(Tracker *t) {
+    for (int f = 0; f < 5 && !g_abort; f++) {
+        DetectionResult seen;
+        if (bd_detect(t->cam, &t->range, &seen) != 0) return -1;
+        if (t->stream_on) bd_stream_push(t->cam, &seen);
+    }
+    sync_scale_to_height(t);
+    read_floor(t, 0);
+    return 0;
+}
+
+static void update_status(Tracker *t) {
+    if (!t->stream_on) return;
+
+    long   steps[ACE_MOTOR_COUNT];
+    double x, y, h;
+    motion_positions(steps);
+    kin_pose(steps, &x, &y, &h);
+
+    const char *mode = t->tracking ? "verfolgt"
+                     : (t->learned ? "wartet" : "wartet, noch nicht eingemessen");
+
+    char buf[900];
+    snprintf(buf, sizeof(buf),
+        "Betrieb      %s\n"
+        "Lage         %+.1f, %+.1f mm      Hoehe %.1f mm\n"
+        "Kamera       %+.1f Grad verdreht, %.2f px/mm\n"
+        "Kippen       %+.2f Grad im eingeschlossenen Winkel%s\n"
+        "Bodenlinien  Winkel %ld x   Massstab %ld x   Lage %ld x\n"
+        "Zuege        %ld   ohne Objekt %d   neu gelernt %d\n"
+        "Streuung     %.2f mm RMS   Kamera dreht %+.2f Grad/s\n",
+        mode,
+        x, y, h,
+        vis_angle_deg(&t->vis), vis_scale_px_per_mm(&t->vis), t->last_tilt_deg,
+        t->bias_stale ? "  (Versatz veraltet, Lagefix aus)" : "",
+        t->fix_angle, t->fix_scale, t->fix_position,
+        t->cycles, t->lost, t->relearns,
+        vis_drift_rms_mm(&t->vis), vis_angle_rate_dps(&t->vis));
+
+    bd_stream_set_status(buf);
+}
+
+/* Eine Fahrt von Hand, relativ zur jetzigen Lage. */
+static int jog(Tracker *t, double dx, double dy) {
+    long   steps[ACE_MOTOR_COUNT];
+    double x, y;
+    read_state(&x, &y, steps);
+
+    double tx = x + dx;
+    double ty = y + dy;
+    kin_clamp(&tx, &ty);
+
+    printf("\nHandfahrt %+.0f,%+.0f mm  ->  %+.1f,%+.1f\n", dx, dy, tx, ty);
+    if (path_start(tx, ty, t->delay_us) != 0) return -1;
+
+    int r = drive_and_drain(t, -1.0);
+    return (r < 0) ? -1 : 0;
+}
+
+/* Befehle der Bedienseite abarbeiten. Sie kommen aus einem anderen Thread,
+ * werden hier aber im Takt der Regelschleife ausgefuehrt - nebenlaeufig an
+ * den Motoren zu drehen waere der sichere Weg ins Chaos. */
+static int handle_commands(Tracker *t) {
+    char cmd[128];
+
+    while (bd_stream_take_command(cmd, (int)sizeof(cmd))) {
+        double dx, dy;
+        int    on;
+
+        if (sscanf(cmd, "jog=%lf,%lf", &dx, &dy) == 2) {
+            t->tracking = 0;            /* Handbetrieb schlaegt Verfolgung */
+            path_abort();
+            if (jog(t, dx, dy) < 0) return -1;
+
+        } else if (sscanf(cmd, "track=%d", &on) == 1) {
+            if (on) {
+                if (!t->learned) {
+                    printf("\nErst einmessen. Objekt bitte still liegen "
+                           "lassen.\n");
+                    if (learn(t) < 0) return -1;
+                    t->learned = 1;
+                }
+                t->tracking    = 1;
+                t->prev_err_px = -1.0;
+                t->stall       = 0;
+                printf("\nVerfolgung laeuft.\n");
+            } else {
+                t->tracking = 0;
+                path_abort();
+                printf("\nVerfolgung angehalten.\n");
+            }
+
+        } else if (strcmp(cmd, "center") == 0) {
+            t->tracking = 0;
+            path_abort();
+            long   steps[ACE_MOTOR_COUNT];
+            double x, y;
+            read_state(&x, &y, steps);
+            if (jog(t, -x, -y) < 0) return -1;
+
+        } else if (strcmp(cmd, "stop") == 0) {
+            t->tracking = 0;
+            path_abort();
+            printf("\nHalt.\n");
+
+        } else if (strcmp(cmd, "learn") == 0) {
+            t->tracking = 0;
+            path_abort();
+            printf("\nEinmessen. Objekt bitte still liegen lassen.\n");
+            if (learn(t) < 0) return -1;
+            t->learned = 1;
+        }
+        if (g_abort) break;
+    }
+    return 0;
+}
+
+/* Aeussere Schleife: Befehle, dann entweder ein Regelzug oder warten. */
+static int run_loop(Tracker *t, long max_cycles) {
+    while (!g_abort && (max_cycles <= 0 || t->cycles < max_cycles)) {
+        if (handle_commands(t) < 0) return -1;
+        if (g_abort) break;
+
+        if (t->tracking) {
+            if (track_cycle(t) < 0) return -1;
+        } else {
+            if (idle_tick(t) < 0) return -1;
+        }
+        update_status(t);
     }
     return 0;
 }
@@ -880,6 +1071,11 @@ int main(int argc, char **argv) {
     t.bias_y_mm    = 0.0;
     t.bias_tilt_deg = 0.0;
     t.bias_stale   = 0;
+    t.tracking     = 0;
+    t.learned      = 0;
+    t.prev_err_px  = -1.0;
+    t.stall        = 0;
+    t.lost_run     = 0;
     floor_default_lines(t.lines);
     t.weak         = ACE_WEAK_MOTOR;
     t.slip_total_mm = 0.0;
@@ -1049,6 +1245,7 @@ int main(int argc, char **argv) {
                     stream_port);
         } else {
             t.stream_on = 1;
+            bd_stream_set_page(ACE_PAGE);
             fprintf(stderr, "Livebild unter http://<pi-ip>:%d/  "
                             "(Guete %d, Groesse %.0f %%)\n",
                     stream_port, jpeg_quality, stream_scale * 100.0);
@@ -1117,8 +1314,20 @@ int main(int argc, char **argv) {
                    "0 Grad.\n\n", px_per_mm);
         }
 
+        t.learned = (rc == 0 && do_learn);
+
+        /* Mit Bedienseite wird gewartet, statt sofort loszufahren - sonst
+         * liefe die Verfolgung schon, bevor man den Knopf ueberhaupt
+         * sieht. Ohne Seite bleibt es beim alten Verhalten. */
+        t.tracking = !t.stream_on;
+
+        if (t.stream_on) {
+            printf("Bedienseite unter http://<pi-ip>:%d/ - die Verfolgung\n"
+                   "startet dort ueber den Knopf.\n\n", stream_port);
+        }
+
         if (rc == 0 && !g_abort) {
-            if (follow(&t, max_cycles) < 0) rc = 1;
+            if (run_loop(&t, max_cycles) < 0) rc = 1;
         }
     }
 

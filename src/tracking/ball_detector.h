@@ -97,6 +97,23 @@ typedef struct {
 
     int bd_stream_start(int port);
 
+    /* ---- Bedienseite -----------------------------------------------------
+     *
+     * Der Streamserver kann zusaetzlich eine Seite ausliefern und Befehle
+     * von ihr entgegennehmen. Die Bibliothek kennt deren Bedeutung nicht -
+     * sie reicht Zeichenketten durch. Was ein Befehl heisst, entscheidet
+     * allein das Programm, das bd_stream_take_command aufruft. */
+
+    /* Seite, die unter "/" ausgeliefert wird. NULL nimmt die eingebaute. */
+    void bd_stream_set_page(const char *html);
+
+    /* Text, den die Seite unter "/status" abholen kann. */
+    void bd_stream_set_status(const char *text);
+
+    /* Naechsten Befehl aus der Warteschlange holen; 1 wenn einer da war.
+     * Der Inhalt ist die Abfrage hinter "/cmd?", unveraendert. */
+    int bd_stream_take_command(char *out, int out_size);
+
     int bd_stream_push(BallDetector *detector, const DetectionResult *result);
 
     void bd_stream_stop(void);

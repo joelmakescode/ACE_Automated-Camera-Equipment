@@ -637,13 +637,34 @@ namespace {
         const char *sp2 = std::strchr(sp1 + 1, ' ');
         if (!sp2) return false;
 
+        /* Mit Abfrage: die Befehle der Bedienseite stehen darin. */
         path.assign(sp1 + 1, static_cast<size_t>(sp2 - sp1 - 1));
-        size_t q = path.find('?');
-        if (q != std::string::npos) path.erase(q);
         return true;
     }
 
+    /* ---- Bedienseite: Befehle und Status -------------------------------- */
+    std::mutex               g_ui_mutex;
+    std::vector<std::string> g_commands;
+    std::string              g_status;
+    std::string              g_page;
+
+    void serve_text(int client_fd, const char *type, const std::string &body) {
+        char head[256];
+        std::snprintf(head, sizeof(head),
+            "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n"
+            "Cache-Control: no-store\r\n"
+            "Content-Length: %zu\r\nConnection: close\r\n\r\n",
+            type, body.size());
+
+        if (send_text(client_fd, head)) send_all(client_fd, body.data(), body.size());
+    }
+
     void serve_index(int client_fd) {
+        {
+            std::lock_guard<std::mutex> lock(g_ui_mutex);
+            if (!g_page.empty()) { serve_text(client_fd, "text/html; charset=utf-8", g_page); return; }
+        }
+
         static const char *body =
             "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
             "<title>ACE</title><style>"
@@ -713,12 +734,31 @@ namespace {
         struct timeval tv = { 5, 0 };
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-        std::string path;
-        if (read_path(client_fd, path)) {
+        std::string full;
+        if (read_path(client_fd, full)) {
+            size_t      q     = full.find('?');
+            std::string path  = (q == std::string::npos) ? full : full.substr(0, q);
+            std::string query = (q == std::string::npos) ? ""   : full.substr(q + 1);
+
             if (path == "/stream.mjpg" || path == "/stream" || path == "/video") {
                 serve_stream(client_fd);
             } else if (path == "/" || path == "/index.html") {
                 serve_index(client_fd);
+            } else if (path == "/cmd") {
+                {
+                    std::lock_guard<std::mutex> lock(g_ui_mutex);
+                    /* Deckel gegen einen haengenden Browser, der schneller
+                     * schickt als die Regelschleife abarbeitet. */
+                    if (g_commands.size() < 32) g_commands.push_back(query);
+                }
+                serve_text(client_fd, "text/plain", "ok");
+            } else if (path == "/status") {
+                std::string s;
+                {
+                    std::lock_guard<std::mutex> lock(g_ui_mutex);
+                    s = g_status;
+                }
+                serve_text(client_fd, "text/plain; charset=utf-8", s);
             } else {
                 serve_404(client_fd);      /* auch /favicon.ico */
             }
@@ -795,6 +835,28 @@ extern "C" int bd_stream_start(int port) {
     g_stream_running = true;
     g_accept_thread = std::thread(stream_accept_loop);
     return 0;
+}
+
+extern "C" void bd_stream_set_page(const char *html) {
+    std::lock_guard<std::mutex> lock(g_ui_mutex);
+    g_page = html ? html : "";
+}
+
+extern "C" void bd_stream_set_status(const char *text) {
+    std::lock_guard<std::mutex> lock(g_ui_mutex);
+    g_status = text ? text : "";
+}
+
+extern "C" int bd_stream_take_command(char *out, int out_size) {
+    if (!out || out_size < 2) return 0;
+
+    std::lock_guard<std::mutex> lock(g_ui_mutex);
+    if (g_commands.empty()) return 0;
+
+    std::snprintf(out, static_cast<size_t>(out_size), "%s",
+                  g_commands.front().c_str());
+    g_commands.erase(g_commands.begin());
+    return 1;
 }
 
 extern "C" void bd_set_stream_quality(int quality) {
