@@ -66,11 +66,11 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 /* Bereich, in dem sich die Plattform bewegen darf: 550 x 350 mm,
  * also 45 mm Rand zum Ankerfeld auf allen vier Seiten. */
 #ifndef ACE_REACH_LIMIT_X_MM
-#define ACE_REACH_LIMIT_X_MM 275.0
+#define ACE_REACH_LIMIT_X_MM 335.0
 #endif
 
 #ifndef ACE_REACH_LIMIT_Y_MM
-#define ACE_REACH_LIMIT_Y_MM 175.0
+#define ACE_REACH_LIMIT_Y_MM 210.0
 #endif
 
 #ifndef ACE_SLACK_PER_100MM
