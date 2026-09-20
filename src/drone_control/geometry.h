@@ -63,12 +63,14 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_START_Y_MM 0.0
 #endif
 
+/* Bereich, in dem sich die Plattform bewegen darf: 550 x 350 mm,
+ * also 45 mm Rand zum Ankerfeld auf allen vier Seiten. */
 #ifndef ACE_REACH_LIMIT_X_MM
-#define ACE_REACH_LIMIT_X_MM 220.0
+#define ACE_REACH_LIMIT_X_MM 275.0
 #endif
 
 #ifndef ACE_REACH_LIMIT_Y_MM
-#define ACE_REACH_LIMIT_Y_MM 170.0
+#define ACE_REACH_LIMIT_Y_MM 175.0
 #endif
 
 #ifndef ACE_SLACK_PER_100MM
@@ -179,9 +181,9 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 #define ACE_FIGURE_WAIT_S 3
 #endif
 
-/* Unterhalb dieses Seilzugs, gemessen in Vielfachen des Plattformgewichts,
- * gilt ein Seil als zu lose: es traegt dann kaum noch, sein Schrittzaehler
- * beschreibt die Lage nicht mehr. */
+/* Unterhalb dieses rechnerischen Seilzugs weist ace_figure in der
+ * Wegpunkttabelle darauf hin. Nur ein Anhaltspunkt: gemessen wird nichts,
+ * und die Verteilung auf vier Seile ist statisch unbestimmt. */
 #ifndef ACE_MIN_CABLE_TENSION
 #define ACE_MIN_CABLE_TENSION 0.05
 #endif
@@ -456,10 +458,10 @@ static const double ACE_MOTOR_TRIM_MM[ACE_MOTOR_COUNT] = ACE_MOTOR_TRIM_LIST;
 /* Aeusserste Wegpunkte. Ihr halbes Sichtfeld reicht ueber den Rand des
  * Fahrbereichs hinaus, damit auch dort nichts uebersehen wird. */
 #ifndef ACE_SEARCH_X_MM
-#define ACE_SEARCH_X_MM 180.0
+#define ACE_SEARCH_X_MM 190.0
 #endif
 #ifndef ACE_SEARCH_Y_MM
-#define ACE_SEARCH_Y_MM 150.0
+#define ACE_SEARCH_Y_MM 170.0
 #endif
 
 /* Durchgaenge ohne Objekt, bevor die Suche anlaeuft. Einer dauert schon

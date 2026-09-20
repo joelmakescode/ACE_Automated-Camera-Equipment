@@ -49,29 +49,8 @@ int figure_x_points(double half_x_mm, double half_y_mm,
     return n;
 }
 
-/* Anteil des Plattformgewichts, den Winde <motor> traegt.
- *
- * Fuer einen Massepunkt an vier Seilen lautet das Kraeftegleichgewicht
- * sum(t_i * u_i) = Gewicht, mit u_i dem Einheitsvektor zum Anker i. Setzt
- * man s_i = t_i / l_i, zerfaellt das in sum(s_i * (Anker_i - P)) = 0 in der
- * Ebene und h * sum(s_i) = Gewicht senkrecht. Die erste Bedingung heisst:
- * die mit s_i gewichtete Mitte der vier Anker ist genau die XY-Lage der
- * Plattform. Die Gewichte sind also baryzentrische Koordinaten, und fuer ein
- * Rechteck ist die bilineare Wahl die natuerliche.
- *
- * Das System ist mit vier Seilen und drei Gleichungen einfach ueberbestimmt;
- * welche Verteilung sich real einstellt, haengt an der Seildehnung. Die
- * bilineare Loesung ist eine gueltige und innerhalb des Ankerfelds durchweg
- * positive Verteilung, also brauchbar als Massstab. */
-static double load_share(int motor, double x_mm, double y_mm) {
-    double u = (x_mm + ACE_ANCHOR_SPAN_X_MM / 2.0) / ACE_ANCHOR_SPAN_X_MM;
-    double v = (y_mm + ACE_ANCHOR_SPAN_Y_MM / 2.0) / ACE_ANCHOR_SPAN_Y_MM;
-
-    double fx = (ACE_MOTOR_CORNER[motor][0] > 0) ? u : (1.0 - u);
-    double fy = (ACE_MOTOR_CORNER[motor][1] > 0) ? v : (1.0 - v);
-
-    return fx * fy;
-}
+/* Die Berechnung des getragenen Gewichtsanteils steht in kinematics.c,
+ * weil kin_clamp sie ebenfalls braucht - siehe kin_load_share. */
 
 void figure_pose(double x_mm, double y_mm, FigurePose *out) {
     if (!out) return;
@@ -85,7 +64,7 @@ void figure_pose(double x_mm, double y_mm, FigurePose *out) {
         double l       = kin_cable_length(i, x_mm, y_mm);
         double flat_sq = l * l - ACE_HOVER_HEIGHT_MM * ACE_HOVER_HEIGHT_MM;
         double flat    = (flat_sq > 0.0) ? sqrt(flat_sq) : 0.0;
-        double share   = load_share(i, x_mm, y_mm);
+        double share   = kin_load_share(i, x_mm, y_mm);
 
         if (share < 0.0) {
             share = 0.0;

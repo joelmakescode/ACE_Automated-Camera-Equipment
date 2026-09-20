@@ -254,6 +254,32 @@ void kin_reset_motor(int motor, double x_mm, double y_mm,
     g_reference_steps[motor]  = motor_steps ? motor_steps[motor] : 0;
 }
 
+/* Anteil des Plattformgewichts, den Winde <motor> traegt.
+ *
+ * Fuer einen Massepunkt an vier Seilen lautet das Kraeftegleichgewicht
+ * sum(t_i * u_i) = Gewicht, mit u_i dem Einheitsvektor zum Anker i. Setzt
+ * man s_i = t_i / l_i, zerfaellt das in sum(s_i * (Anker_i - P)) = 0 in der
+ * Ebene und h * sum(s_i) = Gewicht senkrecht. Die erste Bedingung heisst:
+ * die mit s_i gewichtete Mitte der vier Anker ist genau die XY-Lage der
+ * Plattform. Die Gewichte sind also baryzentrische Koordinaten, und fuer
+ * ein Rechteck ist die bilineare Wahl die natuerliche.
+ *
+ * Das System ist mit vier Seilen und drei Gleichungen einfach
+ * ueberbestimmt; welche Verteilung sich real einstellt, haengt an der
+ * Seildehnung. Die bilineare Loesung ist eine gueltige und innerhalb des
+ * Ankerfelds durchweg positive Verteilung, also brauchbar als Massstab. */
+double kin_load_share(int motor, double x_mm, double y_mm) {
+    if (motor < 0 || motor >= ACE_MOTOR_COUNT) return 0.0;
+
+    double u = (x_mm + ACE_ANCHOR_SPAN_X_MM / 2.0) / ACE_ANCHOR_SPAN_X_MM;
+    double v = (y_mm + ACE_ANCHOR_SPAN_Y_MM / 2.0) / ACE_ANCHOR_SPAN_Y_MM;
+
+    double fx = (ACE_MOTOR_CORNER[motor][0] > 0) ? u : (1.0 - u);
+    double fy = (ACE_MOTOR_CORNER[motor][1] > 0) ? v : (1.0 - v);
+
+    return fx * fy;
+}
+
 void kin_clamp(double *x_mm, double *y_mm) {
     if (x_mm) {
         if (*x_mm >  ACE_REACH_LIMIT_X_MM) *x_mm =  ACE_REACH_LIMIT_X_MM;

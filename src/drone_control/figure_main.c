@@ -127,7 +127,7 @@ static int print_waypoints(const FigurePoint *points, int count) {
             printf("   AUSSERHALB DES ANKERFELDS");
             weak++;
         } else if (pose.min_tension < ACE_MIN_CABLE_TENSION) {
-            printf("   Seil zu lose");
+            printf("   Zug gering");
             weak++;
         }
         printf("\n");
@@ -313,9 +313,13 @@ static void track(RunStats *st, double spread, double height,
     }
     if (!st->tension_warned && pose->min_tension < ACE_MIN_CABLE_TENSION) {
         st->tension_warned = 1;
-        fprintf(stderr, "\nEin Seil traegt nur noch %.2f des Plattformgewichts "
-                        "und wird lose.\nSein Schrittzaehler beschreibt die Lage "
-                        "dann nicht mehr: --size verkleinern.\n",
+        fprintf(stderr,
+                "\nRechnerisch traegt ein Seil nur noch %.2f des "
+                "Plattformgewichts.\nDas ist kein Messwert - einen "
+                "Kraftaufnehmer gibt es nicht, und die\nVerteilung auf vier "
+                "Seile ist statisch unbestimmt. Sicher ist nur:\nnahe am Rand "
+                "des Ankerfelds geht der Zug eines Seils gegen null,\nbei "
+                "jeder moeglichen Verteilung. --size verkleinern.\n",
                 pose->min_tension);
     }
 }

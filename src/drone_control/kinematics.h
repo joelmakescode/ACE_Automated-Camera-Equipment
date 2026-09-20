@@ -23,6 +23,12 @@ void kin_plan(const long motor_steps[ACE_MOTOR_COUNT],
               double target_x_mm, double target_y_mm,
               long steps[ACE_MOTOR_COUNT]);
 
+/* Gewichtsanteil, den Winde <motor> an diesem Punkt traegt; die vier
+ * Anteile summieren sich zu eins. Nur fuer die Statikanzeige in
+ * ace_figure, siehe figure.h. */
+double kin_load_share(int motor, double x_mm, double y_mm);
+
+/* Ziel auf die Fahrgrenzen zuruecknehmen. */
 void kin_clamp(double *x_mm, double *y_mm);
 
 /* Seillaenge zur Nennhoehe ACE_HOVER_HEIGHT_MM. */
