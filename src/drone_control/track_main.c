@@ -515,6 +515,13 @@ static void check_slip(Tracker *t) {
  * Ausreisserfilter bleibt dabei offen: er soll bewegte Objekte abwehren,
  * wuerde hier aber genau die Messungen abweisen, die ein grob falsches
  * Modell geraderuecken. Das Objekt muss in dieser Phase stillliegen. */
+/* Rueckgabe: 0 gelernt, 1 vom Nutzer abgebrochen, 2 nicht lernbar
+ * (Objekt nicht zu sehen), -1 echter Fehler an Kamera oder Antrieb.
+ *
+ * Der Unterschied zwischen 2 und -1 ist wichtig: ein nicht sichtbares
+ * Objekt ist ein voellig gewoehnlicher Ausgangszustand - erst recht mit
+ * Bedienseite, wo man es ja gerade erst hinlegen will. Das darf das
+ * Programm nicht beenden. */
 static int learn(Tracker *t) {
     static const double dir[4][2] = { { 1, 0 }, { 0, 1 }, { -1, 0 }, { 0, -1 } };
 
@@ -529,10 +536,11 @@ static int learn(Tracker *t) {
         long   steps[ACE_MOTOR_COUNT];
 
         int m = measure(t, &eu0, &ev0, NULL);
-        if (m != 0) {
+        if (m < 0) return -1;
+        if (m > 0) {
             fprintf(stderr, "Lernphase: Objekt nicht sichtbar. HSV-Bereich oder "
                             "Beleuchtung pruefen.\n");
-            return -1;
+            return 2;
         }
         read_state(&x0, &y0, steps);
 
@@ -541,13 +549,16 @@ static int learn(Tracker *t) {
         kin_clamp(&tx, &ty);
 
         if (path_start(tx, ty, t->delay_us) != 0) return -1;
-        if (drive_and_drain(t, DRIVE_PLAIN, 0.0) != 0) return -1;
+        int dr = drive_and_drain(t, DRIVE_PLAIN, 0.0);
+        if (dr < 0) return -1;
+        if (dr == 1) return 1;
 
         m = measure(t, &eu1, &ev1, NULL);
-        if (m != 0) {
+        if (m < 0) return -1;
+        if (m > 0) {
             fprintf(stderr, "Lernphase: Objekt nach der Probefahrt verloren. "
                             "--probe-mm verkleinern.\n");
-            return -1;
+            return 2;
         }
         read_state(&x1, &y1, steps);
 
@@ -570,7 +581,7 @@ static int learn(Tracker *t) {
     if (g_abort) return 1;
     if (good < 2) {
         fprintf(stderr, "Lernphase: zu wenige brauchbare Probefahrten.\n");
-        return -1;
+        return 2;
     }
 
     /* Die Probefahrten gegen das fertige Modell zurueckrechnen. Passen sie
@@ -965,7 +976,13 @@ static int handle_commands(Tracker *t) {
                 if (!t->learned) {
                     printf("\nErst einmessen. Objekt bitte still liegen "
                            "lassen.\n");
-                    if (learn(t) < 0) return -1;
+                    int lr = learn(t);
+                    if (lr < 0) return -1;
+                    if (lr != 0) {
+                        printf("Einmessen nicht moeglich - Objekt nicht im "
+                               "Bild. Verfolgung bleibt aus.\n");
+                        continue;
+                    }
                     t->learned = 1;
                 }
                 t->tracking    = 1;
@@ -995,8 +1012,10 @@ static int handle_commands(Tracker *t) {
             t->tracking = 0;
             path_abort();
             printf("\nEinmessen. Objekt bitte still liegen lassen.\n");
-            if (learn(t) < 0) return -1;
-            t->learned = 1;
+            int lr = learn(t);
+            if (lr < 0) return -1;
+            if (lr == 0) t->learned = 1;
+            else printf("Einmessen nicht moeglich - Objekt nicht im Bild.\n");
         }
         if (g_abort) break;
     }
@@ -1490,18 +1509,25 @@ int main(int argc, char **argv) {
         read_floor(&t, 1);
         printf("\n");
 
+        int lr_ok = 0;
         if (do_learn) {
             printf("Lernphase: vier Probefahrten ueber %.0f mm. Objekt bitte\n"
                    "still liegen lassen.\n", t.probe_mm);
             int lr = learn(&t);
-            if (lr < 0) rc = 1;
+            if (lr < 0) rc = 1;          /* nur echte Fehler sind fatal */
+            lr_ok = (lr == 0);
+            if (lr == 2 && stream_on) {
+                printf("Noch nicht eingemessen. Objekt ins Bild legen und auf "
+                       "der Seite\n\"neu lernen\" druecken - oder gleich "
+                       "\"starten\", das misst vorher ein.\n");
+            }
             printf("\n");
         } else {
             printf("Ohne Lernphase, Startwerte aus geometry.h: %.3f px/mm, "
                    "0 Grad.\n\n", px_per_mm);
         }
 
-        t.learned = (rc == 0 && do_learn);
+        t.learned = (rc == 0 && do_learn && lr_ok);
 
         /* Mit Bedienseite wird gewartet, statt sofort loszufahren - sonst
          * liefe die Verfolgung schon, bevor man den Knopf ueberhaupt
