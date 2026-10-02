@@ -1,53 +1,110 @@
 # ACE - Automated Camera Equipment
 
-Ein Modellbau-Projekt einer an einem Seil befestigten Drohne, die autonom einem Ball folgt und das Sichtfeld der Drohne in Echtzeit auf einen Bildschirm überträgt.
+Ein Modellbau-Projekt: Eine Kameraplattform hängt an vier Seilen über einem
+Spielfeld (dem „Stadion“), folgt autonom einem farbigen Ball und überträgt ihr
+Sichtfeld in Echtzeit in den Browser.
+
+📄 **Ausführliche Anleitung:** [`docs/ACE_Anleitung.docx`](docs/ACE_Anleitung.docx)
+— Aufbau, Inbetriebnahme, alle Programmoptionen und eine vollständige
+Funktionsreferenz.
 
 ## Projektbeschreibung
 
-Dieses Projekt kombiniert Robotik, Computer Vision und Embedded Systems in einem kompakten Demonstrator. Die Drohne bewegt sich entlang eines gespannten Seils und verfolgt dabei einen Ball automatisiert. Die Bildverarbeitung sowie die Videoausgabe werden von einem Raspberry Pi (RPI) übernommen.
+Vier Schrittmotor-Winden in den Ecken des Stadions verändern die Seillängen und
+bewegen die Plattform dadurch frei in der Fläche. Ein Raspberry Pi wertet das
+Bild der nach unten blickenden Kamera aus, erkennt den Ball und fährt die
+Plattform so nach, dass der Ball in der Bildmitte bleibt.
 
-Ziel des Projekts ist die Entwicklung eines intelligenten Kamerasystems, das Objekte erkennen, verfolgen und die gewonnenen Bilddaten auf einem externen Bildschirm darstellen kann.
+Das Projekt kombiniert Robotik, Computer Vision und Embedded Systems in einem
+kompakten Demonstrator.
 
 ## Funktionen
 
-- Automatische Ballerkennung
-- Echtzeit-Objektverfolgung
-- Live-Videoübertragung auf einen Bildschirm
-- Bildverarbeitung mit Raspberry Pi
-- Modellbau-Drohne mit Seilführung
-- Echtzeitsteuerung und Bewegungsanpassung
+- Ballerkennung über einen HSV-Farbbereich (OpenCV, Standard: Rot)
+- Echtzeit-Verfolgung mit selbstlernendem Bildmodell (Kamerawinkel und Maßstab)
+- 3D-Seilkinematik: Fahrten werden in 5-mm-Stücke zerlegt und je Stück neu geplant
+- Höhe halten: die tatsächliche Hängehöhe wird aus den Schrittzählern mitgeführt
+- Bodenlinien (blau/grün) als absolute Referenz für Winkel, Lage und Maßstab
+- Suchfahrt in Schlangenlinie, wenn der Ball verloren geht
+- Erkennung und Behandlung einer durchrutschenden Winde
+- Livestream (MJPEG) mit Bedienseite im Browser: Handsteuerung, Start/Stopp, Neu lernen
+- Diagnose-Werkzeuge für Motoren, Farberkennung, Mechanik und Statik
 
 ## Hardware
 
-### Komponenten
+| Komponente      | Ausführung                                                   |
+| --------------- | ------------------------------------------------------------ |
+| Rechner         | Raspberry Pi mit Raspberry Pi OS (Bookworm)                  |
+| Kamera          | Raspberry-Pi-Kameramodul, angesteuert über `rpicam-vid`      |
+| Winden          | 4 × Schrittmotor 28BYJ-48 mit Treiber ULN2003, 5 V           |
+| Seiltrommeln    | Wickeldurchmesser 20 mm (je Winde einstellbar)               |
+| Bodenlinien     | 2 matte Klebebänder, blau und grün, Strichteilung 50 mm      |
+| Objekt          | roter Ball                                                   |
 
-- Raspberry Pi
-- Kameramodul (Raspberry Pi Camera oder USB-Kamera)
-- Modellbau-Drohne
-- Seil- bzw. Schienensystem
-- Motorsteuerung
-- Bildschirm oder Monitor
-- Stromversorgung
+Ankerfeld 640 × 440 mm, Plattform 150 mm unter den Ankern, Kamera 300 mm über
+dem Boden. Alle Maße und Grenzwerte stehen in
+[`src/drone_control/geometry.h`](src/drone_control/geometry.h), die
+GPIO-Belegung in [`src/drone_control/pins.h`](src/drone_control/pins.h):
+
+| Winde | Lage         | IN1 | IN2 | IN3 | IN4 |
+| ----- | ------------ | --- | --- | --- | --- |
+| 0     | unten links  | 17  | 18  | 27  | 22  |
+| 1     | oben links   | 23  | 24  | 25  | 4   |
+| 2     | oben rechts  | 5   | 6   | 12  | 13  |
+| 3     | unten rechts | 16  | 19  | 20  | 21  |
 
 ## Software
 
-### Verwendete Technologien
-
-- Raspberry PI OS
-- Programmiersprache C
+- Programmiersprachen C (C11) und C++ (C++17)
+- OpenCV für die Bildverarbeitung
+- CMake als Build-System
+- Raspberry Pi OS, GPIO über `/dev/gpiochip0`
 
 ## Projektstruktur
 
 ```text
 .
-├── src/
-│   ├── tracking/
-│   ├── drone_control/
-│   └── streaming/
+├── CMakeLists.txt
+├── requirements.txt          apt-Pakete für den Pi
+├── diagram.puml              UML-Diagramm
 ├── docs/
-├── images/
-├── requirements.txt
-└── README.md
+│   └── ACE_Anleitung.docx    ausführliche Anleitung
+└── src/
+    ├── tracking/             Kamera, Ball-/Linienerkennung, Stream-Server
+    ├── drone_control/        Antrieb, Kinematik, Bahnplanung, Regelung
+    └── streaming/            (noch leer)
+```
+
+## Installation und Build
+
+```sh
+sudo apt install build-essential cmake libopencv-dev pkg-config v4l-utils
+cmake -S . -B build
+cmake --build build
+```
+
+Standardmäßig wird mit höchstens zwei parallelen Übersetzungen gebaut, weil die
+OpenCV-Übersetzung rund 1 GB RAM braucht. Mit mehr Speicher:
+`cmake --build build --parallel 4`.
+
+## Programme
+
+| Programm         | Zweck                                                   | Kamera |
+| ---------------- | ------------------------------------------------------- | ------ |
+| `ace_motor_test` | Motoren und Verdrahtung prüfen, Wickeldurchmesser messen | nein   |
+| `ace_tracking`   | Ballerkennung und Farbbereich testen (`--probe`, `--mask`) | ja   |
+| `ace_figure`     | X-Figur ohne Kamera, Mechanik einmessen                 | nein   |
+| `ace_drone`      | Kalibrieren, Positionen anfahren                        | ja     |
+| `ace_track`      | vollständige Ballverfolgung (Hauptprogramm)             | ja     |
+
+Alle Programme außer `ace_tracking` werden nur unter Linux gebaut. Empfohlene
+Reihenfolge bei der Inbetriebnahme:
+
+```sh
+./ace_motor_test --pattern all       # jede Winde einzeln prüfen
+./ace_tracking --probe               # Farbbereich des Balls messen
+./ace_figure --plan-only             # Mechanik durchrechnen, dann fahren
+./ace_track --stream=8080            # verfolgen, Livebild unter http://<pi>:8080/
 ```
 
 ## Figurenfahrt ohne Kamera (`ace_figure`)
@@ -173,11 +230,14 @@ wird — dann beschreibt sein Schrittzähler die Lage nicht mehr.
 
 ## Funktionsweise
 
-1. Die Kamera erfasst kontinuierlich das Sichtfeld.
-2. Der Raspberry Pi analysiert die Videodaten.
-3. Der Ball wird erkannt und lokalisiert.
-4. Die Drohne bewegt sich entlang des Seils, um dem Ball zu folgen.
-5. Das Live-Bild wird auf einem angeschlossenen Bildschirm angezeigt.
+1. Die Kamera an der Plattform erfasst kontinuierlich das Spielfeld.
+2. Der Raspberry Pi sucht im Bild den Ball (Farbmaske, größte Fläche).
+3. Das Bildmodell rechnet die Abweichung zur Bildmitte in einen Fahrweg in mm um.
+4. Die Kinematik bestimmt daraus die vier Seillängen bzw. Halbschritte der Winden.
+5. Die Winden fahren synchron; die Bewegung wird nachgemessen und das Modell nachgeführt.
+6. Das Live-Bild wird im Browser angezeigt.
 
 ## PlantUML
-Zur Veranschaulichung des Programmcodes wird die Funktionsweise der Unified Modelling Language (UML) verwendet.
+
+Zur Veranschaulichung des Programmcodes wird die Unified Modeling Language (UML)
+verwendet. Das Diagramm liegt in [`diagram.puml`](diagram.puml).
